@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSN 配置与控制平面图解 (Qcc, Qat, Qca)</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --panel: #1a1d2d;
+            --text: #e0e0e0;
+            --primary: #9c27b0; /* 紫色系，代表控制平面 */
+            --node-bg: #263238;
+            --line: #455a64;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1, h2 { color: var(--primary); margin: 10px 0; }
+        
+        .nav-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            background: var(--panel);
+            padding: 10px 20px;
+            border-radius: 50px;
+            border: 1px solid #333;
+        }
+
+        .nav-btn {
+            cursor: pointer;
+            padding: 8px 20px;
+            border-radius: 20px;
+            transition: all 0.3s;
+            color: #aaa;
+            font-weight: bold;
+        }
+
+        .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+        .nav-btn.active { background: var(--primary); color: #fff; }
+
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            gap: 20px;
+            flex: 1;
+        }
+
+        .diagram-box {
+            flex: 2;
+            background: radial-gradient(#23263a 1px, transparent 1px);
+            background-size: 20px 20px;
+            border: 1px solid #333;
+            border-radius: 12px;
+            position: relative;
+            min-height: 500px;
+            overflow: hidden;
+        }
+
+        .text-box {
+            flex: 1;
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #333;
+        }
+
+        .step-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .step-item {
+            padding: 15px;
+            border-left: 3px solid #444;
+            margin-bottom: 15px;
+            background: rgba(255,255,255,0.02);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .step-item:hover { background: rgba(255,255,255,0.05); }
+        .step-item.active { border-left-color: var(--primary); background: rgba(156, 39, 176, 0.1); }
+
+        .step-title { font-weight: bold; margin-bottom: 5px; color: #fff; }
+        .step-desc { font-size: 13px; color: #aaa; line-height: 1.5; }
+
+        /* SVG Elements */
+        text { font-family: sans-serif; fill: #e0e0e0; }
+        .node-rect { fill: var(--node-bg); stroke: #aaa; stroke-width: 2; rx: 8; }
+        .msg-line { stroke: var(--primary); stroke-width: 2; stroke-dasharray: 5,5; }
+        .anim-packet { fill: var(--primary); }
+
+        .back-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .back-link:hover { color: #fff; }
+
+    </style>
+</head>
+<body>
+
+    <a href="tsn_control.html" class="back-link">↩ 返回总览</a>
+
+    <h1>TSN 控制平面详解</h1>
+    <div style="color:#888; margin-bottom:20px;">如何配置和管理 TSN 网络 (802.1Qcc, Qat, Qca)</div>
+
+    <div class="nav-bar">
+        <div class="nav-btn active" onclick="setMode('qcc')">802.1Qcc (CNC)</div>
+        <div class="nav-btn" onclick="setMode('qat')">802.1Qat (SRP)</div>
+        <div class="nav-btn" onclick="setMode('qca')">802.1Qca (Path)</div>
+        <div class="nav-btn" onclick="setMode('summary')" style="border-color:var(--primary); color:var(--primary)">🆚 核心差异对比</div>
+    </div>
+
+    <div class="container">
+        <div class="diagram-box" id="diagram">
+            <!-- SVG will be injected here -->
+        </div>
+        
+        <div class="text-box">
+            <h2 id="modeTitle">集中式网络配置 (CNC)</h2>
+            <div id="modeDesc" style="margin-bottom:20px; color:#aaa; font-size:14px;">
+                TSN 的大脑。用户通过 CUC 提交需求，CNC 计算路径和调度表，然后统一下发给交换机。
+            </div>
+            <div class="step-list" id="stepList">
+                <!-- Steps will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const DATA = {
+            qcc: {
+                title: "802.1Qcc - 集中式配置 (CNC) [场景：AGV 小车视频回传]",
+                desc: "<b>场景背景：</b> 工厂里的一台 AGV 小车 (Talker) 需要把高清摄像头画面实时传回中控室屏幕 (Listener)，以便远程监控。如果网络卡顿，小车可能会撞人。我们需要 CNC 来确保这段视频流绝对流畅。",
+                talkerLabel: "AGV Camera",
+                listenerLabel: "Control Monitor",
+                steps: [
+                    {
+                        t: "1. 提需求：我要发视频！",
+                        d: "AGV 小车通过 CUC 告诉 CNC：<br>“我是 AGV-01，我要给中控室发一个视频流。<br><b>带宽：</b>50Mbps (4K画面)<br><b>延迟：</b>必须小于 2ms (不然刹不住车)”",
+                        anim: (svg) => drawMsg(svg, 130, 300, 400, 120, "Req: 4K Video, <2ms")
+                    },
+                    {
+                        t: "2. 算路径：CNC 的上帝视角",
+                        d: "CNC 拿出工厂网络地图，开始计算：<br>“从 AGV 到中控室，走 SW1 -> SW2 最快。<br>但是 SW1 此时拥堵，我需要给这个视频流安排一个<b>VIP 绿色通道 (GCL)</b>。”",
+                        anim: (svg) => {
+                            highlightPath(svg);
+                            drawLabel(svg, 400, 30, "Planning: GCL Schedule...", "yellow");
+                        }
+                    },
+                    {
+                        t: "3. 下配置：全网同步",
+                        d: "CNC 像指挥官一样，向沿途的 SW1 和 SW2 下达指令：<br>“在每秒的第 0-10ms，把所有路口都封死，只准 AGV 的视频流通过！”<br>交换机收到配置并生效。",
+                        anim: (svg) => {
+                            drawMsg(svg, 400, 120, 250, 240, "GCL: Open for AGV");
+                            drawMsg(svg, 400, 120, 550, 240, "GCL: Open for AGV");
+                        }
+                    },
+                    {
+                        t: "4. 开播：畅通无阻",
+                        d: "配置完成，CNC 通知 AGV “路铺好了”。<br>AGV 开始推流，视频数据在预留的“绿色通道”中极速飞驰，毫无卡顿地显示在中控室屏幕上。",
+                        anim: (svg) => drawStream(svg)
+                    }
+                ]
+            },
+            qat: {
+                title: "802.1Qat - 流预留协议 (SRP)",
+                desc: "早期的分布式配置协议。设备自己喊话“我要发数据”，交换机逐跳协商资源。不需要中央控制器，适合简单网络，但难以做复杂的全局调度。",
+                steps: [
+                    {
+                        t: "1. Talker Advertise (我以此流参数发送)",
+                        d: "Talker 广播一个 <b>Talker Advertise</b> 消息，包含流 ID 和流量参数 (T-Spec)。<br>消息在网络中泛洪或沿路径传播。",
+                        anim: (svg) => drawMsg(svg, 130, 300, 250, 240, "Talker Adv")
+                    },
+                    {
+                        t: "2. Listener Join (我要听这个流)",
+                        d: "Listener 收到广播后，如果想接收，就回复一个 <b>Listener Ready</b> 消息。<br>该消息沿原路返回，逐跳确认资源。",
+                        anim: (svg) => drawMsg(svg, 670, 300, 550, 240, "Listener Ready")
+                    },
+                    {
+                        t: "3. 资源锁定 (Resource Reservation)",
+                        d: "沿途交换机收到 Ready 消息后，检查带宽是否足够。如果足够，就锁定资源（预留带宽），并向上传递。",
+                        anim: (svg) => {
+                            drawLabel(svg, 250, 350, "Reserve BW", "#4caf50");
+                            drawLabel(svg, 550, 350, "Reserve BW", "#4caf50");
+                            drawMsg(svg, 550, 240, 250, 240, "Ready Propagates");
+                        }
+                    },
+                    {
+                        t: "4. 建立完成",
+                        d: "Talker 收到最终的 Ready 消息，确认路径已打通，开始发送数据。",
+                        anim: (svg) => drawStream(svg)
+                    }
+                ]
+            },
+            qca: {
+                title: "802.1Qca - 路径控制与预留 (PCR) [场景：化工厂紧急停机]",
+                desc: "<b>场景背景：</b> 化工厂的压力传感器 (Talker) 监测到异常，必须立即发送“停机指令”给阀门 (Listener)。<br>为了万无一失，我们不能只走一条路（万一断了呢？）。<br>Qca 的任务就是建立<b>两条完全不重合</b>的显式路径 (Explicit Paths)，配合 FRER 实现双发选收。",
+                talkerLabel: "Sensor",
+                listenerLabel: "Valve",
+                steps: [
+                    {
+                        t: "1. 拓扑发现 (IS-IS 协议)",
+                        d: "Qca 扩展了 IS-IS 路由协议。交换机之间互相发送 Hello 包，交换链路状态信息。<br>最终，每个节点（包括 PCE 计算单元）都拥有了一张完整的<b>全网地图</b>。",
+                        anim: (svg) => drawPulse(svg)
+                    },
+                    {
+                        t: "2. 智能算路 (PCE)",
+                        d: "路径计算单元 (PCE) 介入。它不仅仅找“最短路径”，而是要找“两条最不相关的路径”。<br><b>目标：</b>路径 A 和 路径 B 尽量不经过同一个中间交换机，防止单点故障。",
+                        anim: (svg) => {
+                             // 绘制计算过程
+                             drawLabel(svg, 400, 80, "PCE Calculating Disjoint Paths...", "yellow");
+                             drawPath(svg, [130, 210, 510, 670], 300, "Path A (Primary)", "var(--primary)"); // Straight
+                             drawPath(svg, [130, 210, 360, 510, 670], 400, "Path B (Redundant)", "#ff9800"); // Curve
+                        }
+                    },
+                    {
+                        t: "3. 锁定显式树 (Explicit Tree)",
+                        d: "计算完成后，Qca 将这两条路径转化为“显式树”信息，下发给交换机。<br>交换机锁定 FDB 表项：<br>• 收到 ID=X 的包，复制两份。<br>• 一份走 Path A，一份走 Path B。",
+                        anim: (svg) => {
+                             drawLabel(svg, 210, 240, "Lock: Split", "var(--success)");
+                             drawLabel(svg, 510, 240, "Lock: Merge", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "4. 双路传输 (FRER 生效)",
+                        d: "传感器发出“停机指令”。<br>指令在 SW1 被复制，沿着两条路狂奔。<br>即使 Path A 的线缆被挖断，Path B 的指令依然能到达阀门，确保安全。",
+                        anim: (svg) => {
+                            // Path A Packet
+                            const c1 = createSvgEl("circle", {r:6, fill:"var(--primary)"});
+                            c1.appendChild(createSvgEl("animateMotion", {path: "M 130 300 L 670 300", dur: "2s", repeatCount: "indefinite"}));
+                            svg.appendChild(c1);
+                            
+                            // Path B Packet (Curved)
+                            const c2 = createSvgEl("circle", {r:6, fill:"#ff9800"});
+                            // Simple curve path
+                            const d = "M 130 300 L 210 300 Q 360 450 510 300 L 670 300";
+                            c2.appendChild(createSvgEl("animateMotion", {path: d, dur: "2s", repeatCount: "indefinite"}));
+                            svg.appendChild(c2);
+                            
+                            // Cut event
+                            setTimeout(() => {
+                                drawLabel(svg, 360, 290, "⚡ Link Fail!", "#f44336");
+                            }, 1000);
+                        }
+                    }
+                ]
+            },
+            summary: {
+                title: "核心差异对比：Qcc vs Qat vs Qca",
+                desc: "通过对比，选择最适合您业务需求的控制平面方案。",
+                steps: [
+                    {
+                        t: "1. 架构总览 (Architecture)",
+                        d: "左图并列展示了三种协议的控制逻辑差异。<br>请点击下方 <b>“下一步”</b> 按钮，我们将逐一剖析它们的优缺点。",
+                        anim: (svg) => drawSummaryDiagram(svg, 'all')
+                    },
+                    {
+                        t: "2. Qat (SRP): 分布式协商",
+                        d: "<b>特点：</b> 像传话游戏，Talker 发起，交换机逐跳问询。<br><b>✅ 优点：</b> 简单、去中心化、即插即用。<br><b>❌ 缺点：</b> 只有局部视野，无法实现全局最优调度 (容易资源碎片化)。<br><b>🎯 适用：</b> 音视频流 (AVB)，对调度精度要求不高的场景。",
+                        anim: (svg) => drawSummaryDiagram(svg, 'qat')
+                    },
+                    {
+                        t: "3. Qcc (CNC): 集中式控制",
+                        d: "<b>特点：</b> 像塔台指挥，CNC 掌握全局地图，统一发号施令。<br><b>✅ 优点：</b> 上帝视角，能计算微秒级精度的 GCL，资源利用率最高。<br><b>❌ 缺点：</b> 系统复杂，成本高，CNC 是单点故障风险。<br><b>🎯 适用：</b> 工业自动化、车载骨干网 (需要 Qbv 的场景)。",
+                        anim: (svg) => drawSummaryDiagram(svg, 'qcc')
+                    },
+                    {
+                        t: "4. Qca (PCR): 显式路径",
+                        d: "<b>特点：</b> 像导航软件，强制指定“怎么走”。<br><b>✅ 优点：</b> 能建立不相交的多条路径 (Disjoint Paths)，解决环路问题。<br><b>❌ 缺点：</b> 协议栈复杂 (IS-IS 扩展)。<br><b>🎯 适用：</b> 高可靠性冗余传输 (配合 FRER 使用)。",
+                        anim: (svg) => drawSummaryDiagram(svg, 'qca')
+                    }
+                ]
+            }
+        };
+
+        let currentMode = 'qcc';
+        let currentStep = 0;
+
+        function setMode(mode) {
+            currentMode = mode;
+            currentStep = 0;
+            
+            // UI Update
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(b => {
+                if(b.textContent.toLowerCase().includes(mode)) b.classList.add('active');
+            });
+            
+            document.getElementById('modeTitle').textContent = DATA[mode].title;
+            document.getElementById('modeDesc').innerHTML = DATA[mode].desc;
+            
+            renderSteps();
+            drawBase();
+        }
+
+        function renderSteps() {
+            const list = document.getElementById('stepList');
+            list.innerHTML = '';
+            DATA[currentMode].steps.forEach((s, i) => {
+                const li = document.createElement('li');
+                li.className = `step-item ${i === currentStep ? 'active' : ''}`;
+                li.innerHTML = `<div class="step-title">${s.t}</div><div class="step-desc">${s.d}</div>`;
+                li.onclick = () => { currentStep = i; renderSteps(); drawBase(); s.anim(document.getElementById('svgRoot')); };
+                list.appendChild(li);
+            });
+            
+            // Auto trigger animation for current step
+            setTimeout(() => {
+                DATA[currentMode].steps[currentStep].anim(document.getElementById('svgRoot'));
+            }, 100);
+        }
+
+        function createSvgEl(type, attrs) {
+            const el = document.createElementNS("http://www.w3.org/2000/svg", type);
+            for(let k in attrs) el.setAttribute(k, attrs[k]);
+            return el;
+        }
+
+        function drawBase() {
+            const container = document.getElementById('diagram');
+            container.innerHTML = '';
+            
+            const svg = createSvgEl("svg", {width: "100%", height: "100%", viewBox: "0 0 800 500", id: "svgRoot"});
+            container.appendChild(svg);
+            
+            if(currentMode === 'summary') return; // Summary 模式由 anim 函数完全接管绘图
+
+            // Nodes
+            // CNC (Top)
+            if(currentMode === 'qcc') {
+                svg.appendChild(createSvgEl("rect", {x:350, y:50, width:100, height:60, class:"node-rect", fill:"#37474f"}));
+                const t = createSvgEl("text", {x:400, y:85, "text-anchor":"middle", "font-weight":"bold"});
+                t.textContent = "CNC";
+                svg.appendChild(t);
+            }
+
+            // Talker (Left)
+            svg.appendChild(createSvgEl("rect", {x:50, y:270, width:80, height:60, class:"node-rect"}));
+            const t1 = createSvgEl("text", {x:90, y:305, "text-anchor":"middle"}); 
+            t1.textContent = DATA[currentMode].talkerLabel || "Talker"; 
+            svg.appendChild(t1);
+
+            // Listener (Right)
+            svg.appendChild(createSvgEl("rect", {x:670, y:270, width:80, height:60, class:"node-rect"}));
+            const t2 = createSvgEl("text", {x:710, y:305, "text-anchor":"middle"}); 
+            t2.textContent = DATA[currentMode].listenerLabel || "Listener"; 
+            svg.appendChild(t2);
+
+            // Switches
+            const drawSw = (x, y, label) => {
+                svg.appendChild(createSvgEl("rect", {x:x, y:y, width:80, height:60, class:"node-rect"}));
+                const t = createSvgEl("text", {x:x+40, y:y+35, "text-anchor":"middle"});
+                t.textContent = label;
+                svg.appendChild(t);
+            };
+
+            drawSw(210, 270, "SW1");
+            drawSw(510, 270, "SW2");
+            
+            // Links
+            const drawLink = (x1, y1, x2, y2) => {
+                svg.appendChild(createSvgEl("line", {x1:x1, y1:y1, x2:x2, y2:y2, stroke:"#555", "stroke-width":4}));
+            };
+            
+            drawLink(130, 300, 210, 300); // Talker -> SW1
+            drawLink(290, 300, 510, 300); // SW1 -> SW2
+            drawLink(590, 300, 670, 300); // SW2 -> Listener
+
+            // Config Links (Dashed)
+            if(currentMode === 'qcc') {
+                 // CNC -> Switches
+                 svg.appendChild(createSvgEl("path", {d:"M 400 110 L 250 270", stroke:"#555", "stroke-dasharray":"5,5"}));
+                 svg.appendChild(createSvgEl("path", {d:"M 400 110 L 550 270", stroke:"#555", "stroke-dasharray":"5,5"}));
+                 // Talker -> CUC -> CNC (Simplified)
+                 svg.appendChild(createSvgEl("path", {d:"M 90 270 L 90 80 L 350 80", stroke:"#555", "stroke-dasharray":"5,5"}));
+                 const tCuc = createSvgEl("text", {x:90, y:70, "text-anchor":"middle", fill:"#aaa"}); tCuc.textContent = "CUC"; svg.appendChild(tCuc);
+            }
+        }
+
+        // Animations
+        function drawMsg(svg, x1, y1, x2, y2, text) {
+            const g = createSvgEl("g");
+            const circle = createSvgEl("circle", {cx:x1, cy:y1, r:8, fill:"var(--primary)"});
+            g.appendChild(circle);
+            
+            const anim = createSvgEl("animate", {
+                attributeName: "cx", from: x1, to: x2, dur: "1s", fill: "freeze", begin: "0s"
+            });
+            const animY = createSvgEl("animate", {
+                attributeName: "cy", from: y1, to: y2, dur: "1s", fill: "freeze", begin: "0s"
+            });
+            circle.appendChild(anim);
+            circle.appendChild(animY);
+            
+            // Label moving with it
+            const t = createSvgEl("text", {x:x1, y:y1-15, "text-anchor":"middle", fill:"var(--primary)", "font-weight":"bold"});
+            t.textContent = text;
+            const animTx = createSvgEl("animate", {
+                attributeName: "x", from: x1, to: x2, dur: "1s", fill: "freeze", begin: "0s"
+            });
+            const animTy = createSvgEl("animate", {
+                attributeName: "y", from: y1-15, to: y2-15, dur: "1s", fill: "freeze", begin: "0s"
+            });
+            t.appendChild(animTx);
+            t.appendChild(animTy);
+            g.appendChild(t);
+            
+            svg.appendChild(g);
+        }
+
+        function highlightPath(svg) {
+            const p = createSvgEl("path", {
+                d: "M 130 300 L 670 300", 
+                stroke: "var(--primary)", "stroke-width": 6, "stroke-opacity": 0.3, fill: "none"
+            });
+            svg.appendChild(p);
+        }
+
+        function drawStream(svg) {
+            highlightPath(svg);
+            // Multiple packets
+            for(let i=0; i<3; i++) {
+                const c = createSvgEl("circle", {r:6, fill:"#fff"});
+                const anim = createSvgEl("animateMotion", {
+                    path: "M 130 300 L 670 300",
+                    dur: "2s",
+                    begin: `${i*0.5}s`,
+                    repeatCount: "indefinite"
+                });
+                c.appendChild(anim);
+                svg.appendChild(c);
+            }
+        }
+
+        function drawLabel(svg, x, y, text, color) {
+            const t = createSvgEl("text", {x:x, y:y, "text-anchor":"middle", fill:color, "font-weight":"bold"});
+            t.textContent = text;
+            svg.appendChild(t);
+        }
+
+        function drawPulse(svg) {
+             [250, 550].forEach(x => {
+                 const c = createSvgEl("circle", {cx:x, cy:300, r:10, fill:"none", stroke:"var(--primary)", "stroke-width":2});
+                 const anim = createSvgEl("animate", {attributeName:"r", from:10, to:50, dur:"1s", repeatCount:"indefinite"});
+                 const op = createSvgEl("animate", {attributeName:"opacity", from:1, to:0, dur:"1s", repeatCount:"indefinite"});
+                 c.appendChild(anim);
+                 c.appendChild(op);
+                 svg.appendChild(c);
+             });
+        }
+        
+        function drawPath(svg, xCoords, y, label, color) {
+            let d = `M ${xCoords[0]} ${y}`;
+            for(let i=1; i<xCoords.length; i++) d += ` L ${xCoords[i]} ${y}`;
+            
+            // Just visualization, curve it if needed
+            if(y !== 300) {
+                // simple curve logic for backup path
+                d = `M 130 300 Q 400 ${y} 670 300`;
+            } else {
+                d = "M 130 300 L 670 300";
+            }
+
+            const p = createSvgEl("path", {d:d, stroke:color, "stroke-width":4, fill:"none", "stroke-dasharray":"5,5"});
+            svg.appendChild(p);
+            
+            const t = createSvgEl("text", {x:400, y:y, fill:color, "text-anchor":"middle", "font-weight":"bold"});
+            t.textContent = label;
+            svg.appendChild(t);
+        }
+
+        function drawSummaryDiagram(svg, highlightMode='all') {
+            // highlightMode: 'all' | 'qat' | 'qcc' | 'qca'
+            
+            // Helper to determine opacity
+            const getOp = (mode) => (highlightMode === 'all' || highlightMode === mode) ? 1 : 0.2;
+
+            // 1. Qat (Distributed)
+            const g1 = createSvgEl("g", {opacity: getOp('qat')});
+            g1.appendChild(createSvgEl("rect", {x:50, y:50, width:200, height:300, fill:"#1e2230", stroke:"#444", rx:8}));
+            const t1 = createSvgEl("text", {x:150, y:80, "text-anchor":"middle", fill:"#fff", "font-weight":"bold"});
+            t1.textContent = "Qat (分布式)";
+            g1.appendChild(t1);
+            
+            // Nodes talking
+            drawMiniNode(g1, 100, 150, "A");
+            drawMiniNode(g1, 200, 150, "B");
+            drawMiniNode(g1, 150, 250, "C");
+            g1.appendChild(createSvgEl("path", {d:"M 110 160 L 190 160 M 110 160 L 150 240", stroke:"#aaa", "stroke-dasharray":"3,3"}));
+            
+            const d1 = createSvgEl("text", {x:150, y:320, "text-anchor":"middle", fill:"#aaa", "font-size":12});
+            d1.textContent = "节点协商 (P2P)";
+            g1.appendChild(d1);
+            svg.appendChild(g1);
+
+            // 2. Qcc (Centralized)
+            const g2 = createSvgEl("g", {opacity: getOp('qcc')});
+            g2.appendChild(createSvgEl("rect", {x:280, y:50, width:200, height:300, fill:"#1e2230", stroke:"var(--primary)", "stroke-width":2, rx:8}));
+            const t2 = createSvgEl("text", {x:380, y:80, "text-anchor":"middle", fill:"var(--primary)", "font-weight":"bold"});
+            t2.textContent = "Qcc (集中式)";
+            g2.appendChild(t2);
+            
+            // CNC controlling
+            drawMiniNode(g2, 380, 120, "CNC");
+            drawMiniNode(g2, 330, 250, "SW1");
+            drawMiniNode(g2, 430, 250, "SW2");
+            g2.appendChild(createSvgEl("path", {d:"M 380 130 L 330 240 M 380 130 L 430 240", stroke:"var(--primary)", "stroke-width":2}));
+            
+            const d2 = createSvgEl("text", {x:380, y:320, "text-anchor":"middle", fill:"#aaa", "font-size":12});
+            d2.textContent = "上帝视角 (Global)";
+            g2.appendChild(d2);
+            svg.appendChild(g2);
+
+            // 3. Qca (Path)
+            const g3 = createSvgEl("g", {opacity: getOp('qca')});
+            g3.appendChild(createSvgEl("rect", {x:510, y:50, width:200, height:300, fill:"#1e2230", stroke:"#444", rx:8}));
+            const t3 = createSvgEl("text", {x:610, y:80, "text-anchor":"middle", fill:"#ff9800", "font-weight":"bold"});
+            t3.textContent = "Qca (显式路径)";
+            g3.appendChild(t3);
+            
+            // Multiple paths
+            drawMiniNode(g3, 560, 150, "In");
+            drawMiniNode(g3, 660, 150, "Out");
+            g3.appendChild(createSvgEl("path", {d:"M 560 160 Q 610 100 660 160", stroke:"var(--primary)", "stroke-width":2, fill:"none"}));
+            g3.appendChild(createSvgEl("path", {d:"M 560 160 Q 610 300 660 160", stroke:"#ff9800", "stroke-width":2, fill:"none"}));
+            
+            const d3 = createSvgEl("text", {x:610, y:320, "text-anchor":"middle", fill:"#aaa", "font-size":12});
+            d3.textContent = "多路径控制 (Explicit)";
+            g3.appendChild(d3);
+            svg.appendChild(g3);
+        }
+
+        function drawMiniNode(parent, x, y, label) {
+            parent.appendChild(createSvgEl("circle", {cx:x, cy:y, r:15, fill:"#37474f", stroke:"#aaa"}));
+            const t = createSvgEl("text", {x:x, y:y+4, "text-anchor":"middle", fill:"#fff", "font-size":10});
+            t.textContent = label;
+            parent.appendChild(t);
+        }
+
+        // Init
+        setMode('qcc');
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSN 流量控制深度图解 (Qbv & Qbu)</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --panel: #1a1d2d;
+            --text: #e0e0e0;
+            --primary: #00bcd4;
+            --accent: #ff4081;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --line: #2f334d;
+            
+            --q-crit: #00bcd4; /* 关键流颜色 */
+            --q-bg: #78909c;   /* 背景流颜色 */
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 顶部导航 */
+        .navbar {
+            background: #14161f;
+            border-bottom: 1px solid #333;
+            padding: 0 20px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: bold;
+            color: #fff;
+            margin-right: 30px;
+        }
+
+        .nav-btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #aaa;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+        .nav-btn.active { 
+            color: var(--bg); 
+            background: var(--primary); 
+            font-weight: bold;
+        }
+
+        /* 主体布局 */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* 左侧绘图区 */
+        .diagram-area {
+            flex: 1;
+            position: relative;
+            background: radial-gradient(#23263a 1px, transparent 1px);
+            background-size: 20px 20px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 右侧控制区 */
+        .control-panel {
+            width: 400px;
+            background: var(--panel);
+            border-left: 1px solid #333;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        .step-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 20px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 10px;
+        }
+
+        .step-title { font-size: 18px; font-weight: bold; color: var(--primary); }
+        .step-counter { font-size: 12px; color: #666; }
+
+        .step-desc {
+            font-size: 15px;
+            line-height: 1.6;
+            color: #ccc;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .info-box {
+            background: rgba(0,0,0,0.3);
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-prev { background: #333; color: #aaa; }
+        .btn-next { background: var(--primary); color: #000; }
+        
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.1); }
+
+        /* SVG 样式 */
+        text { fill: var(--text); font-family: 'Segoe UI', sans-serif; }
+        .gate-box { stroke: #555; stroke-width: 2; fill: #1e2230; }
+        .queue-box { stroke: #444; stroke-width: 1; fill: none; }
+        .packet { rx: 2; stroke: #fff; stroke-width: 0; }
+        .timeline { stroke: #333; stroke-width: 2; }
+        
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* 模态框样式 */
+        .modal {
+            display: none; 
+            position: fixed; 
+            z-index: 100; 
+            left: 0;
+            top: 0;
+            width: 100%; 
+            height: 100%; 
+            background-color: rgba(0,0,0,0.7); 
+            backdrop-filter: blur(2px);
+        }
+        .modal-content {
+            background-color: #1a1d2d;
+            margin: 10% auto; 
+            padding: 30px;
+            border: 1px solid #444;
+            width: 80%;
+            max-width: 600px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            color: #aaa;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .close-btn:hover { color: #fff; }
+        
+        .mnemonic-card {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid var(--primary);
+        }
+        .mnemonic-title { font-weight: bold; color: var(--primary); margin-bottom: 5px; display: block;}
+        .mnemonic-tip { color: #ccc; font-size: 14px; }
+        .highlight { color: #fff; font-weight: bold; background: rgba(255,255,255,0.1); padding: 0 4px; border-radius: 2px;}
+
+        .btn-help {
+            margin-top: 15px;
+            background: transparent;
+            border: 1px solid #444;
+            color: #888;
+            font-weight: normal;
+        }
+        .btn-help:hover {
+            border-color: #666;
+            color: #fff;
+            background: rgba(255,255,255,0.05);
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- 记忆小抄模态框 -->
+    <div id="helpModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="toggleHelp()">&times;</span>
+            <h2 style="margin-top:0; color:var(--text)">📝 TSN 缩写速记指南</h2>
+            
+            <div class="mnemonic-card" style="border-color: #e91e63">
+                <span class="mnemonic-title">🔥 协议名称记忆法 (核心)</span>
+                <div class="mnemonic-tip">
+                    • <b>802.1Qbv</b> (TAS) = <span class="highlight">V</span>IP 通道<br>
+                      &nbsp;&nbsp;👉 记忆：给 VIP 流量预留专属时间，闲人回避。<br>
+                    • <b>802.1Qbu</b> (Preemption) = <span class="highlight">U</span>rgent (紧急)<br>
+                      &nbsp;&nbsp;👉 记忆：<span class="highlight">U</span>rgent 紧急包可以插队。<br>
+                    • <b>802.3br</b> (PHY层) = <span class="highlight">br</span>eak (打断)<br>
+                      &nbsp;&nbsp;👉 记忆：在物理层把长包打断 (<span class="highlight">br</span>eak)，配合 Qbu 工作。<br>
+                    • <b>802.1Qav</b> (CBS) = <span class="highlight">Av</span>erage (平均)<br>
+                      &nbsp;&nbsp;👉 记忆：把突发流量整形为平均速率 (<span class="highlight">Av</span>erage)。<br>
+                    • <b>802.1Qci</b> (PSFP) = <span class="highlight">Ci</span>ty Guard (城管)<br>
+                      &nbsp;&nbsp;👉 记忆：像城管一样在入口 (<span class="highlight">Ci</span>ty Gate) 检查和过滤流量。<br>
+                    • <b>802.1CB</b> (FRER) = <span class="highlight">C</span>opy & <span class="highlight">B</span>ackup<br>
+                      &nbsp;&nbsp;👉 记忆：复制 (<span class="highlight">C</span>opy) 一份做备份 (<span class="highlight">B</span>ackup) → 双发选收。<br>
+                    • <b>802.1AS</b> (gPTP) = <span class="highlight">A</span>ll <span class="highlight">S</span>ync<br>
+                      &nbsp;&nbsp;👉 记忆：让所有 (<span class="highlight">A</span>ll) 设备时间同步 (<span class="highlight">S</span>ync)。
+                </div>
+            </div>
+
+            <div class="mnemonic-card" style="border-color: var(--q-bg)">
+                <span class="mnemonic-title">MAC 类型 (谁是急包？)</span>
+                <div class="mnemonic-tip">
+                    • <b>pMAC</b> = <span class="highlight">P</span>ause-able (可以暂停的) → 普通流量<br>
+                    • <b>eMAC</b> = <span class="highlight">E</span>xpress (特快列车) → 关键流量
+                </div>
+            </div>
+
+            <div class="mnemonic-card" style="border-color: var(--warning)">
+                <span class="mnemonic-title">SMD 前缀 (Start Merge Delimiter)</span>
+                <div class="mnemonic-tip">
+                    • <b>SMD-S</b> = <span class="highlight">S</span>tart (开始) → 切片的第一段<br>
+                    • <b>SMD-C</b> = <span class="highlight">C</span>ontinue (继续) → 切片的后续段<br>
+                    • <b>SMD-E</b> = <span class="highlight">E</span>xpress (特快) → 完整的急包
+                </div>
+            </div>
+
+            <div class="mnemonic-card" style="border-color: var(--success)">
+                <span class="mnemonic-title">校验码 (CRC vs FCS)</span>
+                <div class="mnemonic-tip">
+                    • <b>mCRC</b> = <span class="highlight">m</span>iddle (中间的) / <span class="highlight">m</span>erge → 切片用的临时校验<br>
+                    • <b>FCS</b> = <span class="highlight">F</span>inal (最终的) → 整个包传完的最终校验
+                </div>
+            </div>
+            
+            <div style="text-align:center; margin-top:20px; color:#666; font-size:12px;">
+                点击任意处关闭
+            </div>
+        </div>
+    </div>
+
+    <div class="navbar">
+        <div class="logo">TSN 深度图解</div>
+        <div class="nav-btn active" id="tab-qbv" onclick="switchMode('qbv')">802.1Qbv (TAS)</div>
+        <div class="nav-btn" id="tab-qbu" onclick="switchMode('qbu')">802.1Qbu (Preemption)</div>
+        <div class="nav-btn" id="tab-qav" onclick="switchMode('qav')">802.1Qav (CBS)</div>
+        <div class="nav-btn" id="tab-qci" onclick="switchMode('qci')">802.1Qci (PSFP)</div>
+        <div style="flex:1"></div>
+        <a href="tsn_control.html" class="nav-btn" style="text-decoration:none; background:#333; color:#fff;">
+            ↩ 返回总览
+        </a>
+    </div>
+
+    <div class="main-container">
+        <div class="diagram-area">
+            <svg id="mainSvg" width="800" height="600" viewBox="0 0 800 600">
+                <defs>
+                    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                        <path d="M0,0 L0,6 L9,3 z" fill="#666" />
+                    </marker>
+                </defs>
+                <g id="sceneLayer"></g>
+            </svg>
+        </div>
+
+        <div class="control-panel">
+            <div class="step-card">
+                <div class="step-header">
+                    <span class="step-title" id="sTitle">初始化</span>
+                    <span class="step-counter" id="sCount">0/0</span>
+                </div>
+                <div class="step-desc" id="sDesc">
+                    选择上方标签页开始演示。
+                </div>
+                <div class="info-box" id="sInfo" style="display:none"></div>
+                <div class="btn-group">
+                    <button class="btn-prev" id="btnPrev" onclick="prevStep()">上一步</button>
+                    <button class="btn-next" id="btnNext" onclick="nextStep()">下一步</button>
+                </div>
+                <button class="btn-help" onclick="toggleHelp()">💡 记不住缩写？点我看速记小抄</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // === 数据定义 ===
+        const CONFIG = {
+            qbv: {
+                title: "802.1Qbv - 时间感知整形 (TAS)",
+                steps: [
+                    {
+                        t: "TAS 核心概念：门控列表 (GCL) - 也就是“红绿灯时刻表”",
+                        d: "想象一个十字路口，<b>GCL</b> 就是这个路口的<b>红绿灯控制程序</b>。<br><br><ul><li><b>普通交换机：</b>像没有红绿灯的路口，车子（数据包）挤在一起，谁抢到谁先走，容易堵车。</li><li><b>TSN 交换机：</b>在每个车道（队列）前装了红绿灯（Gate）。</li><li><b>GCL (时间表)：</b>就是一张精确到微秒的排班表，规定“现在 Q7 绿灯，Q0 红灯”。</li></ul>这样，紧急车辆（关键流）永远有专属的“绿灯时间”，绝对不会堵车。",
+                        draw: (ctx) => drawQbvBase(ctx, {g7:0, g0:1, t:0})
+                    },
+                    {
+                        t: "GCL 硬件实现原理：循环列表",
+                        d: "在芯片内部，GCL 是一个<b>循环列表 (Circular List)</b>。<br>列表的每一行（Entry）包含：<br>1. <b>门控掩码 (Gate States)</b>：如 10000001 (Q7, Q0 开)<br>2. <b>持续时间 (Time Interval)</b>：该状态保持多久 (ns)<br><br>硬件逻辑读取当前行，应用门状态，倒计时结束后自动跳到下一行。",
+                        draw: (ctx) => {
+                            // 画背景
+                            drawQbvBase(ctx, {g7:0, g0:1, t:0});
+                            
+                            // 覆盖一个半透明层，聚焦在右侧
+                            ctx.appendChild(createEl("rect", {x:0, y:0, width:800, height:600, fill:"#000", opacity:0.7}));
+                            
+                            // 绘制 GCL 表格结构
+                            const tableX = 250, tableY = 150;
+                            const rowH = 40;
+                            const cols = [80, 150, 100]; // Widths: Index, States, Time
+                            
+                            // 表头
+                            ctx.appendChild(createEl("rect", {x:tableX, y:tableY, width:330, height:rowH, fill:"#37474f"}));
+                            drawLabel(ctx, tableX+20, tableY+25, "Index", "#fff");
+                            drawLabel(ctx, tableX+100, tableY+25, "Gate States", "#fff");
+                            drawLabel(ctx, tableX+250, tableY+25, "Time(ns)", "#fff");
+                            
+                            // 数据行
+                            const rows = [
+                                {id:0, s:"10000001 (Q0)", t:800, active:true},
+                                {id:1, s:"00000000 (All)", t:200, active:false},
+                                {id:2, s:"10000000 (Q7)", t:200, active:false},
+                                {id:3, s:"10000001 (Q0)", t:800, active:false}
+                            ];
+                            
+                            rows.forEach((r, i) => {
+                                const y = tableY + (i+1)*rowH;
+                                const color = r.active ? "var(--primary)" : "#546e7a";
+                                const bg = r.active ? "rgba(0, 188, 212, 0.2)" : "none";
+                                
+                                ctx.appendChild(createEl("rect", {x:tableX, y:y, width:330, height:rowH, fill:bg, stroke:"#444"}));
+                                drawLabel(ctx, tableX+30, y+25, r.id, "#fff");
+                                drawLabel(ctx, tableX+100, y+25, r.s, "#fff");
+                                drawLabel(ctx, tableX+260, y+25, r.t, "#fff");
+                                
+                                if(r.active) {
+                                    // 指针箭头
+                                    drawArrow(ctx, tableX-50, y+20, tableX-10, y+20, "", "var(--primary)");
+                                    drawLabel(ctx, tableX-120, y+25, "Current Ptr", "var(--primary)");
+                                }
+                            });
+                            
+                            // 循环箭头
+                            const endY = tableY + (rows.length+1)*rowH;
+                            ctx.appendChild(createEl("path", {d:`M ${tableX+165} ${endY} L ${tableX+165} ${endY+20} L ${tableX+350} ${endY+20} L ${tableX+350} ${tableY+rowH/2} L ${tableX+330} ${tableY+rowH/2}`, fill:"none", stroke:"#aaa", "stroke-dasharray":"5,5"}));
+                            drawLabel(ctx, tableX+360, tableY+rowH+20, "Loop", "#aaa");
+                        }
+                    },
+                    {
+                        t: "阶段 1: 普通流量发送",
+                        d: "时间 t=0，处于普通时间窗。<br><b>GCL 状态：</b>Q7 门关 (Closed)，Q0 门开 (Open)。<br>一个巨大的背景帧 (Background Frame) 正在发送中。",
+                        draw: (ctx) => {
+                            drawQbvBase(ctx, {g7:0, g0:1, t:100});
+                            // 动画：从左侧进入
+                            drawPacket(ctx, 300, 350, 120, 40, "Background", "var(--q-bg)", 1, false, {x:100, y:350}); 
+                            drawArrow(ctx, 430, 370, 550, 370, "Sending...");
+                        }
+                    },
+                    {
+                        t: "阶段 2: 关键帧到达但被阻塞",
+                        d: "时间 t=200，一个紧急的关键帧 (Critical Frame) 到达 Q7。<br>但是！此时 Q7 的门是<b>关</b>的。<br>关键帧只能在队列里排队等待，不能打断正在发送的背景帧。",
+                        draw: (ctx) => {
+                            drawQbvBase(ctx, {g7:0, g0:1, t:200});
+                            drawPacket(ctx, 300, 350, 100, 40, "Background...", "var(--q-bg)"); // 继续发
+                            // 动画：进入队列
+                            drawPacket(ctx, 180, 150, 60, 40, "Critical", "var(--q-crit)", 1, false, {x:50, y:150}); 
+                            drawLabel(ctx, 260, 170, "门关着，等待!", "#ff5252");
+                        }
+                    },
+                    {
+                        t: "阶段 3: 保护带 (Guard Band)",
+                        d: "时间 t=800，即将进入关键时间窗。<br>为了防止背景帧“拖堂”占用了关键帧的时间，TAS 会提前关闭 Q0 的门。<br>这叫做<b>保护带 (Guard Band)</b>。此时 Q0 停止发送新包。",
+                        draw: (ctx) => {
+                            drawQbvBase(ctx, {g7:0, g0:0, t:800}); // 都关了
+                            drawLabel(ctx, 260, 370, "Guard Band: 提前关门", "#ff9800");
+                            drawPacket(ctx, 180, 150, 60, 40, "Critical", "var(--q-crit)"); // 还在等
+                        }
+                    },
+                    {
+                        t: "阶段 4: 关键窗口开启 (GCL 切换)",
+                        d: "时间 t=1000 (Cycle Start)。<br><b>GCL 切换！</b> Q7 门打开，Q0 保持关闭。<br>关键帧立即获得发送权，没有竞争，没有延迟。",
+                        draw: (ctx) => {
+                            drawQbvBase(ctx, {g7:1, g0:0, t:1000});
+                            // 动画：从队列冲出去
+                            drawPacket(ctx, 300, 150, 60, 40, "Critical", "var(--q-crit)", 1, false, {x:180, y:150}); 
+                            drawArrow(ctx, 370, 170, 550, 170, "畅通无阻!", "#4caf50");
+                        }
+                    },
+                    {
+                        t: "阶段 5: 恢复普通发送",
+                        d: "时间 t=1200，关键帧发完了。<br>GCL 再次切换，Q7 关闭，Q0 打开。<br>背景流继续发送。<br><br><b>总结：</b>TAS 通过时分复用，保证了关键流的确定性低延迟。",
+                        draw: (ctx) => {
+                            drawQbvBase(ctx, {g7:0, g0:1, t:1200});
+                            // 动画：关键帧飞走
+                            drawPacket(ctx, 550, 150, 60, 40, "Critical", "var(--q-crit)", 0.5, false, {x:300, y:150}); 
+                            // 动画：新背景帧进入
+                            drawPacket(ctx, 300, 350, 120, 40, "Next Bg Frame", "var(--q-bg)", 1, false, {x:100, y:350}); 
+                        }
+                    }
+                ]
+            },
+            qbu: {
+                title: "802.1Qbu & 802.3br - 帧抢占机制 (Preemption)",
+                steps: [
+                    {
+                        t: "协议分工：802.1Qbu vs 802.3br",
+                        d: "这两个协议通常一起工作：<br><ul><li><b>802.1Qbu (上层管理)：</b>决定“谁可以抢占谁”。它在网桥层定义了 Express (eMAC) 和 Preemptable (pMAC) 的优先级映射。</li><li><b>802.3br (底层执行)：</b>定义了物理层的“手术刀”。它负责把帧切开、添加特殊的帧头 (SMD) 和校验码 (mCRC)。</li></ul><br><b>MAC Merge Sublayer</b> 是 802.3br 引入的新层，位于 MAC 和 PHY 之间。",
+                        draw: (ctx) => drawQbuBase(ctx, {})
+                    },
+                    {
+                        t: "阶段 1: pMAC 发送完整帧 (SMD-S)",
+                        d: "pMAC 开始发送一个低优先级的大包。<br>根据 802.3br，正常帧通常以 <b>SFD</b> (Start Frame Delimiter) 开头。<br>但在支持抢占的链路上，首个分片（或完整帧）使用 <b>SMD-S (Start)</b> 作为起始符，告诉接收端“这是一个可被抢占的帧”。",
+                        draw: (ctx) => {
+                             drawQbuBase(ctx, {pActive: true});
+                             
+                             // 绘制带 SMD 头的包
+                             drawPacket(ctx, 400, 400, 200, 30, "[SMD-S] Payload ... [FCS]", "var(--q-bg)", 1, false, {x:100, y:400});
+                        }
+                    },
+                    {
+                        t: "阶段 2: 抢占发生 (SMD-S0 + mCRC)",
+                        d: "<b>事件：</b>eMAC 来了急包！<br><b>802.3br 动作：</b><br>1. 立即停止发送 pMAC 当前帧。<br>2. 修改帧尾为 <b>mCRC</b> (而非最终的 FCS)，表示“未完待续”。<br>3. 记录当前的序列号 (Frame Count)。<br>接收端收到 mCRC，知道这个包还没传完，暂时存入 <b>Assembly Buffer</b>。",
+                        draw: (ctx) => {
+                            drawQbuBase(ctx, {pActive: false, eActive: true});
+                            // 被切断的包 (Fragment 1)
+                            drawPacket(ctx, 500, 400, 100, 30, "[SMD-S] Frag1 [mCRC]", "var(--q-bg)", 1, true, {x:400, y:400}); 
+                            drawLabel(ctx, 400, 440, "CUT! 添加 mCRC", "#ff9800");
+                            // 动画：急包进入 eMAC
+                            drawPacket(ctx, 150, 200, 80, 30, "Express", "var(--q-crit)", 1, false, {x:50, y:200});
+                        }
+                    },
+                    {
+                        t: "阶段 3: 插入 Express 帧 (SMD-E)",
+                        d: "链路空闲后，eMAC 发送高优先级帧。<br><b>关键特征：</b>该帧使用 <b>SMD-E</b> (Express) 作为起始符。<br>接收端识别出 SMD-E，知道这是一个完整的急包，直接放行，不进入重组缓冲区。",
+                        draw: (ctx) => {
+                            drawQbuBase(ctx, {pActive: false, eActive: true});
+                            // 之前的碎片飞走了 -> 进入 RX Buffer
+                            drawPacket(ctx, 600, 160, 60, 30, "Frag 1", "var(--q-bg)", 0.8, true, {x:500, y:400});
+                            
+                            // 动画：急包发送
+                            drawPacket(ctx, 400, 200, 120, 30, "[SMD-E] Data", "var(--q-crit)", 1, false, {x:150, y:200});
+                            drawArrow(ctx, 450, 220, 600, 220, "SMD-E: 急包直通", "#ff5252");
+                        }
+                    },
+                    {
+                        t: "阶段 4: 恢复发送 (SMD-C + FragCnt)",
+                        d: "急包发完，恢复 pMAC 发送。<br><b>802.3br 动作：</b><br>1. 发送剩余数据片段。<br>2. 使用 <b>SMD-C (Continuation)</b> 作为起始符。<br>3. 包含分片计数 (FragCnt) 防止乱序。<br>接收端看到 SMD-C，就去缓冲区找上一半拼起来。",
+                        draw: (ctx) => {
+                            drawQbuBase(ctx, {pActive: true, eActive: false});
+                             // 急包飞走了
+                            drawPacket(ctx, 700, 200, 80, 30, "Express", "var(--q-crit)", 0.5, false, {x:400, y:200});
+                            // 剩余部分 (Fragment 2)
+                            drawPacket(ctx, 400, 400, 140, 30, "[SMD-C] Frag2 [FCS]", "var(--q-bg)", 1, true, {x:150, y:400});
+                            drawLabel(ctx, 400, 440, "SMD-C: 继续传输", "#4caf50");
+                            
+                            // 接收端状态
+                            drawPacket(ctx, 600, 160, 60, 30, "Frag 1", "var(--q-bg)", 0.5, true); 
+                        }
+                    },
+                    {
+                        t: "总结：SMD 编码表",
+                        d: "802.3br 的核心魔法就在于替换了 SFD：<br><ul><li><b>SMD-E:</b> Express 帧，不可抢占。</li><li><b>SMD-S:</b> Preemptable 帧的开始 (Start)。</li><li><b>SMD-C:</b> Preemptable 帧的后续分片 (Continuation)。</li></ul>这使得接收端 PHY 能够在底层直接区分帧类型，无需解析上层 Header。",
+                        draw: (ctx) => {
+                            drawQbuBase(ctx, {});
+                            // 展示三个包的对比
+                            drawPacket(ctx, 350, 150, 150, 30, "[SMD-E] Express", "var(--q-crit)", 1);
+                            drawPacket(ctx, 350, 250, 150, 30, "[SMD-S] Start...", "var(--q-bg)", 1, true);
+                            drawPacket(ctx, 350, 350, 150, 30, "[SMD-C] ...Continue", "var(--q-bg)", 1, true);
+                        }
+                    }
+                ]
+            },
+            qav: {
+                title: "802.1Qav - 基于信用的整形 (CBS)",
+                steps: [
+                    {
+                        t: "核心概念：信用积分 (Credit)",
+                        d: "CBS (Credit Based Shaper) 就像信用卡的额度管理。<br>1. <b>发送数据</b>需要消耗信用（扣分）。<br>2. <b>等待期间</b>会恢复信用（加分）。<br>3. 只有信用 >= 0 时才允许发送。<br>这能防止突发流量瞬间淹没网络，把“一波流”平滑成“细水长流”。",
+                        draw: (ctx) => drawQavBase(ctx, {credit: 0, sending: false})
+                    },
+                    {
+                        t: "阶段 1: 积累信用 (Idle Slope)",
+                        d: "队列中有包在等待，但当前信用为负（例如 -50）。<br>此时必须等待。<br>随着时间推移，信用以 <b>IdleSlope</b> 的速率线性增长。<br>这是一个“攒人品”的过程。",
+                        draw: (ctx) => {
+                            drawQavBase(ctx, {credit: -50, sending: false});
+                            drawPacket(ctx, 150, 230, 80, 40, "Packet A", "var(--q-crit)");
+                            drawArrow(ctx, 400, 300, 400, 200, "Credit 增加", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "阶段 2: 信用转正，开始发送",
+                        d: "信用终于涨到了 0！<br>闸门打开，数据包开始发送。<br>在发送过程中，信用会以 <b>SendSlope</b> 的速率迅速下降（扣分）。",
+                        draw: (ctx) => {
+                            drawQavBase(ctx, {credit: 0, sending: true});
+                            drawPacket(ctx, 400, 230, 80, 40, "Packet A", "var(--q-crit)", 1, false, {x:150, y:230});
+                            drawArrow(ctx, 400, 200, 400, 300, "Credit 下降", "#f44336");
+                        }
+                    },
+                    {
+                        t: "阶段 3: 发送结束，信用透支",
+                        d: "包发完了，此时信用变成了负数（例如 -80）。<br>系统进入“还债”模式。<br>下一个包必须等待信用重新涨回 0 才能发送。<br>通过这种机制，强制拉开了包与包之间的间隔。",
+                        draw: (ctx) => {
+                            drawQavBase(ctx, {credit: -80, sending: false});
+                            drawPacket(ctx, 650, 230, 80, 40, "Packet A", "var(--q-crit)", 0.5, false, {x:400, y:230});
+                            drawPacket(ctx, 150, 230, 80, 40, "Packet B", "var(--q-crit)", 1, false, {x:50, y:230});
+                            drawLabel(ctx, 350, 260, "Stop! 信用不足", "#f44336");
+                        }
+                    }
+                ]
+            },
+            qci: {
+                title: "802.1Qci - 流量过滤与监管 (PSFP) 流水线演示",
+                steps: [
+                    {
+                        t: "流水线就绪",
+                        d: "这是一个 PSFP 处理流水线，类似于工厂的质检传送带。<br>所有进入交换机的流量都要依次经过三道关卡：<br>1. <b>Filter</b> (识别身份)<br>2. <b>Gate</b> (检查时间)<br>3. <b>Meter</b> (检查流速)",
+                        draw: (ctx) => drawQciScene(ctx, {})
+                    },
+                    {
+                        t: "1. 报文到达 (Ingress)",
+                        d: "一个 VLAN 100 的数据包到达端口。<br>准备进入处理流程。",
+                        draw: (ctx) => {
+                            drawQciScene(ctx, {});
+                            // 动画：从左外侧(-100) 进入到 Filter 前(50)
+                            drawPacket(ctx, 50, 280, 80, 40, "VLAN 100", "var(--primary)", 1, false, {x: -100, y: 280});
+                        }
+                    },
+                    {
+                        t: "2. Stream Filter (身份识别)",
+                        d: "交换机查找过滤表。<br>规则：VLAN 100 = Stream A。<br><b>Match!</b> 识别成功，该流被关联到 Gate 1 和 Meter 1。",
+                        draw: (ctx) => {
+                            drawQciScene(ctx, {active: 'filter'});
+                            // 动画：从入口(50) -> Filter(150)
+                            drawPacket(ctx, 150, 280, 80, 40, "Stream A", "var(--primary)", 1, false, {x: 50, y: 280});
+                            drawLabel(ctx, 150, 220, "Match: Stream A", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "3. Stream Gate (时间检查)",
+                        d: "检查 Gate 1 的状态。<br>当前时间窗口：<b>OPEN (绿灯)</b>。<br>允许通行！",
+                        draw: (ctx) => {
+                            drawQciScene(ctx, {active: 'gate', gate: 'open'});
+                            // 动画：Filter(150) -> Gate(350)
+                            drawPacket(ctx, 350, 280, 80, 40, "Stream A", "var(--primary)", 1, false, {x: 150, y: 280});
+                            drawLabel(ctx, 350, 220, "Gate: OPEN", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "4. Flow Meter (流量计费)",
+                        d: "检查令牌桶余额。<br>余额充足，扣除 100 积分。<br>未超速，放行！",
+                        draw: (ctx) => {
+                            drawQciScene(ctx, {active: 'meter', gate: 'open', meter: 'ok'});
+                            // 动画：Gate(350) -> Meter(550)
+                            drawPacket(ctx, 550, 280, 80, 40, "Stream A", "var(--primary)", 1, false, {x: 350, y: 280});
+                            drawLabel(ctx, 550, 220, "Token OK (-100)", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "5. 完成转发",
+                        d: "报文通过所有检查，进入交换矩阵进行转发。",
+                        draw: (ctx) => {
+                            drawQciScene(ctx, {gate: 'open', meter: 'ok'}); // 包飞走了
+                            // 动画：Meter(550) -> Out(800)
+                            drawPacket(ctx, 800, 280, 80, 40, "Stream A", "var(--primary)", 0.5, false, {x: 550, y: 280});
+                            drawLabel(ctx, 700, 220, "Forwarding...", "var(--success)");
+                        }
+                    },
+                    {
+                        t: "Meter 1 内部原理：令牌桶算法 (Token Bucket)",
+                        d: "为了精确限速，TSN 使用令牌桶算法。<br>1. <b>注入 (CIR)：</b>系统以恒定速率（如 100Mbps）向桶里放入令牌。<br>2. <b>容量 (CBS)：</b>桶的大小是有限的，满了溢出（不能无限存）。<br>3. <b>消耗：</b>每转发 1 bit 数据，就必须消耗 1 bit 令牌。<br><b>结论：</b>有令牌才能发，没令牌只能丢（或标记变红）。",
+                        draw: (ctx) => {
+                            // 画背景
+                            drawQciScene(ctx, {active: 'meter', gate: 'open', meter: 'ok'});
+                            
+                            // 遮罩层
+                            ctx.appendChild(createEl("rect", {x:0, y:0, width:800, height:600, fill:"#000", opacity:0.8}));
+                            
+                            // 绘制放大的令牌桶
+                            const bX = 400, bY = 300;
+                            const bW = 150, bH = 200;
+                            
+                            // 桶身
+                            ctx.appendChild(createEl("path", {d:`M ${bX-bW/2} ${bY-bH/2} L ${bX-bW/2} ${bY+bH/2} L ${bX+bW/2} ${bY+bH/2} L ${bX+bW/2} ${bY-bH/2}`, fill:"none", stroke:"#fff", "stroke-width":4}));
+                            
+                            // 水龙头 (CIR)
+                            const tapX = bX - bW/2 - 40;
+                            ctx.appendChild(createEl("path", {d:`M ${tapX} ${bY-bH/2-50} L ${bX} ${bY-bH/2-50} L ${bX} ${bY-bH/2-10}`, fill:"none", stroke:"var(--success)", "stroke-width":6}));
+                            ctx.appendChild(createEl("circle", {cx:tapX, cy:bY-bH/2-50, r:10, fill:"#555"})); // 阀门
+                            drawLabel(ctx, tapX, bY-bH/2-70, "CIR (注入速率)", "var(--success)");
+                            
+                            // 滴水动画 (Tokens)
+                            for(let i=0; i<3; i++) {
+                                const drop = createEl("circle", {cx:bX, cy:bY-bH/2+20 + i*30, r:6, fill:"var(--warning)"});
+                                drop.appendChild(createEl("animate", {attributeName:"cy", from:bY-bH/2-10, to:bY+bH/2-20, dur:"1.5s", begin:`${i*0.5}s`, repeatCount:"indefinite"}));
+                                ctx.appendChild(drop);
+                            }
+                            
+                            // 水位 (CBS)
+                            ctx.appendChild(createEl("rect", {x:bX-bW/2+5, y:bY, width:bW-10, height:bH/2, fill:"var(--warning)", opacity:0.5}));
+                            drawLabel(ctx, bX, bY+bH/4, "Tokens (Credits)", "#fff");
+                            
+                            // CBS 标注
+                            drawArrow(ctx, bX+bW/2+10, bY-bH/2, bX+bW/2+10, bY+bH/2, "", "#aaa");
+                            drawLabel(ctx, bX+bW/2+60, bY, "CBS (桶深)", "#aaa");
+                            
+                            // 消耗 (Packet)
+                            drawArrow(ctx, bX, bY+bH/2+10, bX, bY+bH/2+60, "消耗令牌", "#f44336");
+                            drawPacket(ctx, bX-40, bY+bH/2+70, 80, 40, "Packet", "var(--primary)");
+                        }
+                    },
+                    {
+                        t: "异常场景演示：Gate 关闭",
+                        d: "现在模拟另一个场景。<br>假设报文在<b>错误的时间</b>到达。<br>此时 Gate 状态为 <b>CLOSED (红灯)</b>。",
+                        draw: (ctx) => {
+                             drawQciScene(ctx, {active: 'gate', gate: 'closed'});
+                             // 动画：Filter(150) -> Gate(350)
+                             drawPacket(ctx, 350, 280, 80, 40, "Stream B", "#f44336", 1, false, {x: 150, y: 280});
+                             drawLabel(ctx, 350, 220, "Gate CLOSED!", "#f44336");
+                        }
+                    },
+                    {
+                        t: "丢弃处理 (Drop)",
+                        d: "因为 Gate 关闭，报文被立即丢弃。<br>它就像撞上了一堵墙，不会进入后续的 Meter 检查，也不会占用后续带宽。",
+                        draw: (ctx) => {
+                             drawQciScene(ctx, {gate: 'closed'});
+                             // 动画：Gate(350) -> 下方消失
+                             drawPacket(ctx, 350, 450, 80, 40, "DROPPED", "#f44336", 0, false, {x: 350, y: 280});
+                        }
+                    }
+                ]
+            }
+        };
+
+        // === 状态管理 ===
+        let currentMode = 'qbv';
+        let stepIndex = 0;
+        const svgLayer = document.getElementById('sceneLayer');
+
+        function switchMode(mode) {
+            currentMode = mode;
+            stepIndex = 0;
+            
+            // 更新导航栏样式
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`tab-${mode}`).classList.add('active');
+            
+            renderStep();
+        }
+
+        function nextStep() {
+            const max = CONFIG[currentMode].steps.length - 1;
+            if (stepIndex < max) {
+                stepIndex++;
+                renderStep();
+            }
+        }
+
+        function prevStep() {
+            if (stepIndex > 0) {
+                stepIndex--;
+                renderStep();
+            }
+        }
+
+        // 记忆小抄开关
+        function toggleHelp() {
+            const m = document.getElementById('helpModal');
+            m.style.display = (m.style.display === 'block') ? 'none' : 'block';
+        }
+        
+        // 点击模态框背景关闭
+        document.getElementById('helpModal').onclick = function(e) {
+            if(e.target === this) toggleHelp();
+        }
+
+        function renderStep() {
+            const data = CONFIG[currentMode].steps[stepIndex];
+            const total = CONFIG[currentMode].steps.length;
+
+            // 更新文本
+            document.getElementById('sTitle').innerHTML = data.t;
+            document.getElementById('sCount').innerText = `${stepIndex + 1}/${total}`;
+            document.getElementById('sDesc').innerHTML = data.d;
+            
+            // 更新按钮状态
+            document.getElementById('btnPrev').disabled = (stepIndex === 0);
+            document.getElementById('btnNext').disabled = (stepIndex === total - 1);
+
+            // 清空 SVG 并重绘
+            svgLayer.innerHTML = '';
+            data.draw(svgLayer);
+        }
+
+        // === SVG 绘图辅助函数 ===
+        
+        // 创建 SVG 元素
+        function createEl(type, attrs) {
+            const el = document.createElementNS("http://www.w3.org/2000/svg", type);
+            for (let k in attrs) el.setAttribute(k, attrs[k]);
+            return el;
+        }
+
+        // 绘制 Qbv 基础场景 (队列 + 门 + GCL时间轴)
+        function drawQbvBase(parent, state) { // state: {g7: 0/1, g0: 0/1, t: int}
+            // 1. 绘制端口结构
+            // Q7 (上)
+            parent.appendChild(createEl("rect", {x:100, y:130, width:150, height:60, class:"queue-box"}));
+            const t7 = createEl("text", {x:110, y:120, fill:"var(--q-crit)", "font-size":14, "font-weight":"bold"});
+            t7.textContent = "Q7: Critical (关键流)";
+            parent.appendChild(t7);
+            
+            // Q0 (下)
+            parent.appendChild(createEl("rect", {x:100, y:330, width:150, height:60, class:"queue-box"}));
+            const t0 = createEl("text", {x:110, y:320, fill:"var(--q-bg)", "font-size":14, "font-weight":"bold"});
+            t0.textContent = "Q0: Best Effort (背景流)";
+            parent.appendChild(t0);
+
+            // 2. 绘制门 (Gate)
+            const drawGate = (x, y, open, label) => {
+                const color = open ? "var(--success)" : "#f44336";
+                // 门框背景
+                parent.appendChild(createEl("circle", {cx:x, cy:y, r:18, stroke:color, "stroke-width":2, fill:"#14161f"}));
+                // 状态图标
+                if(open) {
+                    // 开：竖线通过
+                    parent.appendChild(createEl("line", {x1:x, y1:y-10, x2:x, y2:y+10, stroke:color, "stroke-width":4}));
+                    parent.appendChild(createEl("path", {d:`M ${x-5} ${y-5} L ${x+5} ${y} L ${x-5} ${y+5}`, fill:color})); // 箭头
+                } else {
+                    // 关：X号
+                    parent.appendChild(createEl("line", {x1:x-8, y1:y-8, x2:x+8, y2:y+8, stroke:color, "stroke-width":4}));
+                    parent.appendChild(createEl("line", {x1:x+8, y1:y-8, x2:x-8, y2:y+8, stroke:color, "stroke-width":4}));
+                }
+                // 标签
+                const t1 = createEl("text", {x:x, y:y-25, "text-anchor":"middle", fill:color, "font-weight":"bold", "font-size":12});
+                t1.textContent = open ? "OPEN" : "CLOSED";
+                parent.appendChild(t1);
+                
+                const t2 = createEl("text", {x:x, y:y+35, "text-anchor":"middle", fill:"#aaa", "font-size":10});
+                t2.textContent = label;
+                parent.appendChild(t2);
+            };
+
+            drawGate(280, 160, state.g7, "Gate 7");
+            drawGate(280, 360, state.g0, "Gate 0");
+
+            // 3. 聚合器 (Multiplexer)
+            parent.appendChild(createEl("path", {d:"M 310 160 L 380 260 L 310 360", fill:"none", stroke:"#555", "stroke-width":2, "stroke-dasharray":"5,5"}));
+            parent.appendChild(createEl("line", {x1:380, y1:260, x2:750, y2:260, stroke:"#444", "stroke-width":6})); // Output Link
+            const tPhy = createEl("text", {x:700, y:240, fill:"#aaa", "font-size":12});
+            tPhy.textContent = "Ethernet PHY (Output)";
+            parent.appendChild(tPhy);
+
+            // 4. GCL 时间轴 (可视化增强)
+            const timelineY = 60;
+            const width = 700;
+            const startX = 50;
+            
+            // 绘制时间条背景
+            // 0-800: Normal (Q0 Open)
+            parent.appendChild(createEl("rect", {x:startX, y:timelineY, width:width*0.4, height:15, fill:"#263238"}));
+            const tNormal = createEl("text", {x:startX+10, y:timelineY-5, fill:"#aaa", "font-size":10});
+            tNormal.textContent = "Normal Window";
+            parent.appendChild(tNormal);
+            
+            // 800-1000: Guard Band (All Closed)
+            parent.appendChild(createEl("rect", {x:startX+width*0.4, y:timelineY, width:width*0.1, height:15, fill:"#ff9800"}));
+            const tGuard = createEl("text", {x:startX+width*0.4, y:timelineY-5, fill:"#ff9800", "font-size":10});
+            tGuard.textContent = "Guard Band";
+            parent.appendChild(tGuard);
+            
+            // 1000-1200: Critical (Q7 Open)
+            parent.appendChild(createEl("rect", {x:startX+width*0.5, y:timelineY, width:width*0.1, height:15, fill:"rgba(0, 188, 212, 0.3)"}));
+            const tCrit = createEl("text", {x:startX+width*0.5, y:timelineY-5, fill:"var(--primary)", "font-size":10});
+            tCrit.textContent = "Critical Window";
+            parent.appendChild(tCrit);
+            
+            // 1200-2000: Normal
+            parent.appendChild(createEl("rect", {x:startX+width*0.6, y:timelineY, width:width*0.4, height:15, fill:"#263238"}));
+
+            // 游标
+            const curX = startX + (state.t/2000)*width;
+            parent.appendChild(createEl("line", {x1:curX, y1:timelineY-10, x2:curX, y2:timelineY+25, stroke:"#fff", "stroke-width":2}));
+            parent.appendChild(createEl("polygon", {points:`${curX-5},${timelineY-10} ${curX+5},${timelineY-10} ${curX},${timelineY}`, fill:"#fff"}));
+            const tTime = createEl("text", {x:curX, y:timelineY+40, "text-anchor":"middle", fill:"#fff", "font-size":12, "font-weight":"bold"});
+            tTime.textContent = `t=${state.t}μs`;
+            parent.appendChild(tTime);
+        }
+
+        // 绘制 Qbu 基础场景 (发送端 + 接收端 + 碎片重组)
+        function drawQbuBase(parent, state) {
+            // 发送端 (Sender)
+            const txX = 50;
+            
+            // eMAC
+            parent.appendChild(createEl("rect", {x:txX, y:150, width:100, height:50, fill:"#1e2230", stroke:"var(--q-crit)", "stroke-width":2, rx:4}));
+            const tEmac = createEl("text", {x:txX+50, y:180, "text-anchor":"middle", fill:"var(--q-crit)", "font-weight":"bold"});
+            tEmac.textContent = "eMAC (Express)";
+            parent.appendChild(tEmac);
+
+            // pMAC
+            parent.appendChild(createEl("rect", {x:txX, y:350, width:100, height:50, fill:"#1e2230", stroke:"var(--q-bg)", "stroke-width":2, rx:4}));
+            const tPmac = createEl("text", {x:txX+50, y:380, "text-anchor":"middle", fill:"var(--q-bg)", "font-weight":"bold"});
+            tPmac.textContent = "pMAC (Standard)";
+            parent.appendChild(tPmac);
+
+            // MAC Merge (Sender)
+            parent.appendChild(createEl("rect", {x:txX+150, y:100, width:60, height:350, rx:10, fill:"#263238", stroke:"#aaa", "stroke-width":2}));
+            const tMergeTx = createEl("text", {x:txX+180, y:250, "text-anchor":"middle", fill:"#fff", "font-weight":"bold", "writing-mode":"tb"});
+            tMergeTx.textContent = "MAC Merge (TX)";
+            parent.appendChild(tMergeTx);
+
+            // 连接线
+            parent.appendChild(createEl("path", {d:`M ${txX+100} 175 L ${txX+150} 175`, stroke:"var(--q-crit)", "stroke-width":2}));
+            parent.appendChild(createEl("path", {d:`M ${txX+100} 375 L ${txX+150} 375`, stroke:"var(--q-bg)", "stroke-width":2}));
+
+            // 物理链路
+            parent.appendChild(createEl("line", {x1:txX+210, y1:275, x2:550, y2:275, stroke:"#555", "stroke-width":4}));
+            
+            // 接收端 (Receiver)
+            const rxX = 550;
+            parent.appendChild(createEl("rect", {x:rxX, y:100, width:60, height:350, rx:10, fill:"#263238", stroke:"#aaa", "stroke-width":2}));
+            const tMergeRx = createEl("text", {x:rxX+30, y:250, "text-anchor":"middle", fill:"#fff", "font-weight":"bold", "writing-mode":"tb"});
+            tMergeRx.textContent = "MAC Merge (RX)";
+            parent.appendChild(tMergeRx);
+            
+            // 接收缓冲区示意
+            parent.appendChild(createEl("rect", {x:rxX+80, y:150, width:80, height:50, class:"queue-box", "stroke-dasharray":"2,2"}));
+            const tBuf = createEl("text", {x:rxX+120, y:140, "text-anchor":"middle", fill:"#aaa", "font-size":10});
+            tBuf.textContent = "Assembly Buf";
+            parent.appendChild(tBuf);
+
+            // 状态指示
+            if(state.eActive) {
+                parent.appendChild(createEl("circle", {cx:txX+180, cy:175, r:6, fill:"var(--success)"}));
+            }
+            if(state.pActive) {
+                parent.appendChild(createEl("circle", {cx:txX+180, cy:375, r:6, fill:"var(--success)"}));
+            }
+        }
+
+        // 绘制 Qav 基础场景 (信用桶)
+        function drawQavBase(parent, state) {
+            // 1. 队列
+            parent.appendChild(createEl("rect", {x:100, y:200, width:150, height:60, class:"queue-box"}));
+            const tQ = createEl("text", {x:110, y:190, fill:"var(--q-crit)", "font-size":14, "font-weight":"bold"});
+            tQ.textContent = "Queue A (Class A)";
+            parent.appendChild(tQ);
+
+            // 2. 门 (Gate) - 受信用控制
+            const gateColor = (state.credit >= 0) ? "var(--success)" : "#f44336";
+            parent.appendChild(createEl("circle", {cx:280, cy:230, r:18, stroke:gateColor, "stroke-width":2, fill:"#14161f"}));
+            if(state.credit >= 0) {
+                 parent.appendChild(createEl("line", {x1:280, y1:220, x2:280, y2:240, stroke:gateColor, "stroke-width":4}));
+            } else {
+                 parent.appendChild(createEl("line", {x1:272, y1:222, x2:288, y2:238, stroke:gateColor, "stroke-width":4}));
+                 parent.appendChild(createEl("line", {x1:288, y1:222, x2:272, y2:238, stroke:gateColor, "stroke-width":4}));
+            }
+
+            // 3. 信用桶可视化
+            const bucketX = 400;
+            const bucketY = 250;
+            // 坐标轴
+            parent.appendChild(createEl("line", {x1:bucketX, y1:150, x2:bucketX, y2:350, stroke:"#555"})); // Y轴
+            parent.appendChild(createEl("line", {x1:bucketX-50, y1:250, x2:bucketX+50, y2:250, stroke:"#888", "stroke-dasharray":"2,2"})); // 0轴
+            
+            // 信用柱状图
+            const barH = Math.abs(state.credit);
+            const barY = (state.credit >= 0) ? (250 - barH) : 250;
+            const barColor = (state.credit >= 0) ? "var(--success)" : "#f44336";
+            
+            parent.appendChild(createEl("rect", {x:bucketX-20, y:barY, width:40, height:barH, fill:barColor, opacity:0.8}));
+            
+            const tCredit = createEl("text", {x:bucketX+30, y:barY + barH/2 + 5, fill:"#fff", "font-weight":"bold"});
+            tCredit.textContent = `Credit: ${state.credit}`;
+            parent.appendChild(tCredit);
+
+            // 4. 出口
+            parent.appendChild(createEl("line", {x1:300, y1:230, x2:600, y2:230, stroke:"#444", "stroke-width":6}));
+            const tPhy = createEl("text", {x:550, y:210, fill:"#aaa", "font-size":12});
+            tPhy.textContent = "Output";
+            parent.appendChild(tPhy);
+        }
+
+        // 绘制 Qci 动态场景 (类似 Qbv 的风格)
+        function drawQciScene(parent, state) {
+            // state: { active: 'filter'|'gate'|'meter', gate: 'open'|'closed', meter: 'ok'|'empty' }
+            const y = 280;
+            
+            // 模块坐标
+            const fX = 150, gX = 350, mX = 550;
+            
+            // 0. 绘制连接线 (背景)
+            parent.appendChild(createEl("line", {x1:50, y1:y, x2:750, y2:y, stroke:"#444", "stroke-width":2}));
+
+            // 1. Stream Filter
+            const fColor = state.active === 'filter' ? "var(--primary)" : "#666";
+            const fStroke = state.active === 'filter' ? 3 : 1;
+            parent.appendChild(createEl("rect", {x:fX-50, y:y-40, width:100, height:80, fill:"#1e2230", stroke:fColor, "stroke-width":fStroke, rx:4}));
+            const tF = createEl("text", {x:fX, y:y+55, "text-anchor":"middle", fill:fColor, "font-size":12, "font-weight":"bold"});
+            tF.textContent = "Filter";
+            parent.appendChild(tF);
+            // 内部图标 (列表)
+            parent.appendChild(createEl("rect", {x:fX-30, y:y-20, width:60, height:10, fill:"#555"}));
+            parent.appendChild(createEl("rect", {x:fX-30, y:y, width:60, height:10, fill:"#555"}));
+
+            // 2. Stream Gate
+            const gColor = state.active === 'gate' ? "var(--primary)" : "#666";
+            const gStroke = state.active === 'gate' ? 3 : 1;
+            parent.appendChild(createEl("rect", {x:gX-50, y:y-40, width:100, height:80, fill:"#1e2230", stroke:gColor, "stroke-width":gStroke, rx:4}));
+            const tG = createEl("text", {x:gX, y:y+55, "text-anchor":"middle", fill:gColor, "font-size":12, "font-weight":"bold"});
+            tG.textContent = "Gate";
+            parent.appendChild(tG);
+            
+            // 内部图标 (开关)
+            const gateOpen = state.gate !== 'closed'; // 默认 open
+            const iconColor = gateOpen ? "var(--success)" : "#f44336";
+            if(gateOpen) {
+                // 绿色竖线
+                parent.appendChild(createEl("line", {x1:gX, y1:y-25, x2:gX, y2:y+25, stroke:iconColor, "stroke-width":6}));
+            } else {
+                // 红色横线 (阻断)
+                parent.appendChild(createEl("line", {x1:gX-25, y1:y, x2:gX+25, y2:y, stroke:iconColor, "stroke-width":6}));
+            }
+
+            // 3. Flow Meter
+            const mColor = state.active === 'meter' ? "var(--primary)" : "#666";
+            const mStroke = state.active === 'meter' ? 3 : 1;
+            parent.appendChild(createEl("rect", {x:mX-50, y:y-40, width:100, height:80, fill:"#1e2230", stroke:mColor, "stroke-width":mStroke, rx:4}));
+            const tM = createEl("text", {x:mX, y:y+55, "text-anchor":"middle", fill:mColor, "font-size":12, "font-weight":"bold"});
+            tM.textContent = "Meter";
+            parent.appendChild(tM);
+            // 内部图标 (桶)
+            parent.appendChild(createEl("path", {d:`M ${mX-20} ${y-20} L ${mX-20} ${y+20} L ${mX+20} ${y+20} L ${mX+20} ${y-20}`, fill:"none", stroke:"var(--warning)", "stroke-width":2}));
+            const waterH = state.meter === 'empty' ? 5 : 30;
+            const waterC = state.meter === 'empty' ? "#f44336" : "var(--warning)";
+            parent.appendChild(createEl("rect", {x:mX-18, y:y+20-waterH, width:36, height:waterH, fill:waterC, opacity:0.6}));
+            
+            // 4. 方向箭头 (装饰)
+            drawArrow(parent, 50, y, 100, y);
+            drawArrow(parent, 200, y, 300, y);
+            drawArrow(parent, 400, y, 500, y);
+            drawArrow(parent, 600, y, 700, y);
+        }
+
+        // 通用：画包 (带平滑移动动画 - Web Animations API 版)
+        function drawPacket(parent, x, y, w, h, text, color, opacity=1, isFragment=false, animateFrom=null) {
+            const g = createEl("g", {opacity: opacity});
+            const rectAttrs = {x:0, y:0, width:w, height:h, fill:color, rx:4};
+            
+            if(isFragment) {
+                rectAttrs["stroke"] = "#fff";
+                rectAttrs["stroke-dasharray"] = "4,2";
+                rectAttrs["stroke-width"] = 2;
+            }
+            
+            g.appendChild(createEl("rect", rectAttrs));
+            const t = createEl("text", {x:w/2, y:h/2+5, "text-anchor":"middle", fill:"#fff", "font-size":12, "font-weight":"bold"});
+            t.textContent = text;
+            g.appendChild(t);
+            
+            // 设置最终位置 (使用 SVG 属性以保证兼容性)
+            g.setAttribute("transform", `translate(${x}, ${y})`);
+            
+            parent.appendChild(g);
+
+            // 如果有起点，则执行 WAAPI 动画
+            if(animateFrom) {
+                try {
+                    g.animate([
+                        { transform: `translate(${animateFrom.x}px, ${animateFrom.y}px)` },
+                        { transform: `translate(${x}px, ${y}px)` }
+                    ], {
+                        duration: 800,
+                        easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)',
+                        fill: 'both'
+                    });
+                } catch(e) {
+                    console.error("Animation failed:", e);
+                }
+            } else {
+                g.classList.add("fade-in");
+            }
+        }
+
+        function drawLabel(parent, x, y, text, color) {
+            const t = createEl("text", {x:x, y:y, fill:color, "font-weight":"bold", class:"fade-in", "font-size":14});
+            t.textContent = text;
+            parent.appendChild(t);
+        }
+
+        function drawArrow(parent, x1, y1, x2, y2, text, color="#aaa") {
+            const g = createEl("g", {class:"fade-in"});
+            g.appendChild(createEl("line", {x1:x1, y1:y1, x2:x2, y2:y2, stroke:color, "stroke-width":2, "marker-end":"url(#arrow)"}));
+            if(text) {
+                const t = createEl("text", {x:(x1+x2)/2, y:y1-10, "text-anchor":"middle", fill:color, "font-size":12});
+                t.textContent = text;
+                g.appendChild(t);
+            }
+            parent.appendChild(g);
+        }
+
+        // 初始化
+        switchMode('qbv');
+
+    </script>
+</body>
+</html>

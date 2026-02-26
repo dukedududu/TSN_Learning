@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>802.1CB (FRER) 深度原理与实现图解</title>
+    <style>
+        :root {
+            --primary: #FF9800;
+            --secondary: #673AB7;
+            --success: #4CAF50;
+            --danger: #F44336;
+            --info: #2196F3;
+            --bg: #0f111a;
+            --text: #e0e0e0;
+            --panel: #1a1d2d;
+            --line: #2f334d;
+            --packet-a: #29b6f6;
+            --packet-b: #ec407a;
+            --tag-color: #ffd740;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        .back-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            z-index: 100;
+        }
+        .back-link:hover { color: #fff; }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+            color: var(--primary);
+            text-align: center;
+        }
+        
+        .subtitle {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 20px;
+        }
+
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1600px;
+            height: 100%;
+            gap: 20px;
+        }
+
+        /* 左侧图解区域 */
+        .diagram-area {
+            flex: 2;
+            background: var(--panel);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .svg-container {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* 右侧控制与讲解区域 */
+        .control-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 400px;
+            max-width: 500px;
+        }
+
+        .step-card {
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 5px solid var(--primary);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .step-header {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: var(--primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .step-desc {
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            color: #ccc;
+        }
+
+        /* 报文结构展示 */
+        .packet-view {
+            background: #263238;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #546E7A;
+        }
+        
+        .packet-title {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .packet-bar {
+            display: flex;
+            height: 30px;
+            border-radius: 4px;
+            overflow: hidden;
+            font-size: 12px;
+            font-weight: bold;
+            line-height: 30px;
+            text-align: center;
+            color: #263238;
+        }
+        
+        .p-field {
+            padding: 0 5px;
+            border-right: 1px solid rgba(0,0,0,0.2);
+            white-space: nowrap;
+            overflow: hidden;
+            transition: all 0.3s;
+        }
+        
+        .p-mac { background: #90A4AE; flex: 2; }
+        .p-vlan { background: #B0BEC5; flex: 1; }
+        .p-rtag { background: var(--tag-color); flex: 2; width: 0; padding: 0; opacity: 0; } /* 默认隐藏 */
+        .p-rtag.show { width: auto; flex: 2; padding: 0 5px; opacity: 1; }
+        .p-data { background: #CFD8DC; flex: 3; }
+
+        /* 表格样式 */
+        .table-view {
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 13px;
+            margin-bottom: 15px;
+        }
+        
+        .table-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .table-row:last-child { border-bottom: none; }
+        .t-key { color: #888; }
+        .t-val { color: var(--success); font-family: monospace; }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: auto;
+            padding-top: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .btn-prev { background: #424242; color: white; }
+        .btn-next { background: var(--primary); color: white; }
+        .btn-reset { background: #d32f2f; color: white; }
+
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* SVG Elements */
+        text { fill: var(--text); font-family: 'Segoe UI', sans-serif; }
+        .link-line { stroke: var(--line); stroke-width: 4; }
+        .device-box { fill: #263238; stroke: #546E7A; stroke-width: 2; rx: 5; }
+        .switch-box { fill: #1e2235; stroke: #3f51b5; stroke-width: 2; rx: 5; }
+        .packet { rx: 4; stroke: #fff; stroke-width: 1; }
+        
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        /* 内部流转动画路径 */
+        .internal-path { stroke: #4caf50; stroke-width: 2; stroke-dasharray: 4; fill: none; opacity: 0.5; }
+
+    </style>
+</head>
+<body>
+
+    <a href="tsn_control.html" class="back-link">↩ 返回总览</a>
+
+    <h1>802.1CB (FRER) 深度原理与实现图解</h1>
+    <div class="subtitle">Stream ID • Sequence Generation • Replication • Elimination • Decoding</div>
+
+    <div class="container">
+        <!-- 核心图解区 -->
+        <div class="diagram-area">
+            <div class="svg-container">
+                <svg id="mainSvg" width="100%" height="100%" viewBox="0 0 1000 600">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
+                        </marker>
+                        <!-- 放大镜效果滤镜 -->
+                        <filter id="glow">
+                            <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                    </defs>
+
+                    <!-- 静态拓扑层 -->
+                    <g id="topologyLayer">
+                        <!-- 链路 -->
+                        <line x1="100" y1="300" x2="300" y2="300" class="link-line" /> <!-- Talker -> SW1 -->
+                        
+                        <line x1="300" y1="300" x2="500" y2="150" class="link-line" /> <!-- SW1 -> SW2 (Path A) -->
+                        <line x1="300" y1="300" x2="500" y2="450" class="link-line" /> <!-- SW1 -> SW3 (Path B) -->
+                        
+                        <line x1="500" y1="150" x2="700" y2="300" class="link-line" id="link-path-a"/> <!-- SW2 -> SW4 -->
+                        <line x1="500" y1="450" x2="700" y2="300" class="link-line" id="link-path-b"/> <!-- SW3 -> SW4 -->
+                        
+                        <line x1="700" y1="300" x2="900" y2="300" class="link-line" /> <!-- SW4 -> Listener -->
+
+                        <!-- 设备节点 -->
+                        <!-- Talker -->
+                        <rect x="20" y="270" width="80" height="60" class="device-box" />
+                        <text x="60" y="305" text-anchor="middle" font-weight="bold">Talker</text>
+                        
+                        <!-- SW1 (Splitter) -->
+                        <rect x="250" y="250" width="100" height="100" class="switch-box" />
+                        <text x="300" y="275" text-anchor="middle" font-weight="bold" fill="#64b5f6">SW1</text>
+                        <text x="300" y="340" text-anchor="middle" font-size="10" fill="#aaa">Splitter</text>
+
+                        <!-- SW2 (Path A) -->
+                        <rect x="450" y="120" width="100" height="60" class="switch-box" />
+                        <text x="500" y="145" text-anchor="middle" font-weight="bold">SW2</text>
+                        <text x="500" y="165" text-anchor="middle" font-size="10" fill="#aaa">Relay</text>
+
+                        <!-- SW3 (Path B) -->
+                        <rect x="450" y="420" width="100" height="60" class="switch-box" />
+                        <text x="500" y="445" text-anchor="middle" font-weight="bold">SW3</text>
+                        <text x="500" y="465" text-anchor="middle" font-size="10" fill="#aaa">Relay</text>
+
+                        <!-- SW4 (Merger) -->
+                        <rect x="650" y="250" width="100" height="100" class="switch-box" />
+                        <text x="700" y="275" text-anchor="middle" font-weight="bold" fill="#ffb74d">SW4</text>
+                        <text x="700" y="340" text-anchor="middle" font-size="10" fill="#aaa">Merger</text>
+
+                        <!-- Listener -->
+                        <rect x="900" y="270" width="80" height="60" class="device-box" />
+                        <text x="940" y="305" text-anchor="middle" font-weight="bold">Listener</text>
+                    </g>
+
+                    <!-- 内部逻辑展示层 (默认隐藏) -->
+                    <g id="internalLogic" display="none"></g>
+
+                    <!-- 动态层 -->
+                    <g id="dynamicLayer"></g>
+                </svg>
+            </div>
+        </div>
+
+        <!-- 右侧讲解区 -->
+        <div class="control-panel">
+            <div class="step-card">
+                <div class="step-header">
+                    <span id="stepTitle">准备就绪</span>
+                    <span id="stepCount" style="font-size:14px; opacity:0.7">0/7</span>
+                </div>
+                
+                <!-- 报文结构视图 -->
+                <div class="packet-view">
+                    <div class="packet-title">当前报文结构 (L2 Frame)</div>
+                    <div class="packet-bar" id="packetBar">
+                        <div class="p-field p-mac">Dest MAC</div>
+                        <div class="p-field p-vlan">VLAN</div>
+                        <div class="p-field p-rtag" id="rtagField">R-TAG</div>
+                        <div class="p-field p-data">Payload</div>
+                    </div>
+                </div>
+
+                <div id="stepDesc" class="step-desc">
+                    点击“下一步”开始深度演示 802.1CB (FRER) 的处理流程。<br><br>
+                    <b>演示重点：</b>
+                    <ul>
+                        <li>流识别 (Stream ID)</li>
+                        <li>序列号生成 (SeqGen)</li>
+                        <li>R-TAG 编码 (Encoding)</li>
+                        <li>冗余传输与消除</li>
+                    </ul>
+                </div>
+                
+                <!-- 动态表格 -->
+                <div id="tableView" class="table-view" style="display:none;">
+                    <div id="tableTitle" class="packet-title">流表状态</div>
+                    <div id="tableContent"></div>
+                </div>
+
+                <div class="controls">
+                    <button class="btn-prev" id="btnPrev" onclick="prevStep()" disabled>上一步</button>
+                    <button class="btn-next" id="btnNext" onclick="nextStep()">下一步</button>
+                    <button class="btn-reset" onclick="resetSim()">重置</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const POS = {
+            talker: {x: 60, y: 300},
+            sw1: {x: 300, y: 300},
+            sw2: {x: 500, y: 150},
+            sw3: {x: 500, y: 450},
+            sw4: {x: 700, y: 300},
+            listener: {x: 940, y: 300}
+        };
+
+        const layer = document.getElementById('dynamicLayer');
+        const internalLayer = document.getElementById('internalLogic');
+        let currentStep = 0;
+        
+        // 模拟状态
+        let currentSeq = 1024;
+        let streamId = "00-01-02-03-04-05:0001"; // MAC + UniqueID
+
+        const steps = [
+            {
+                title: "1. 报文发送 (Transmission)",
+                desc: "Talker 发送一个普通的以太网帧。<br>此时报文只有 MAC 头、VLAN 标签和数据载荷，<b>没有任何 FRER 信息</b>。",
+                setup: () => {
+                    updatePacketView(false); // 无 R-TAG
+                    updateTable("无", "等待报文到达 SW1...");
+                },
+                action: () => {
+                    createPacket(POS.talker.x, POS.talker.y, POS.sw1.x - 40, POS.sw1.y, "Eth Frame", "#fff", 1000);
+                }
+            },
+            {
+                title: "2. 流识别 (Stream Identification)",
+                desc: "报文进入 SW1 入口。SW1 根据 <b>Stream Identity Table</b> 进行匹配。<br>匹配规则通常基于：DestMAC, VLAN ID, 或 IP 五元组。<br><br><b>结果：</b>识别为关键流，分配内部句柄。",
+                setup: () => {
+                    updateTable("Match Rule", "VLAN=100, Dest=AA:BB:CC", "Action", "Map to Stream_Handle_1");
+                    
+                    // 绘制 SW1 内部逻辑
+                    internalLayer.innerHTML = '';
+                    internalLayer.style.display = 'block';
+                    drawInternalBox(POS.sw1.x, POS.sw1.y, "识别", "#2196F3");
+                },
+                action: () => {
+                    // 报文进入 SW1 内部停留
+                    showLabel(POS.sw1.x, POS.sw1.y - 60, "匹配成功 ✔", "#4CAF50");
+                }
+            },
+            {
+                title: "3. 序列号生成 (Sequence Generation)",
+                desc: "SW1 为该流维护一个<b>序列号计数器</b>。<br>每处理一个包，计数器 +1。<br>当前 Seq = " + currentSeq + "。",
+                setup: () => {
+                    updateTable("Stream_Handle_1", "Active", "Next_Seq", currentSeq);
+                    drawInternalBox(POS.sw1.x, POS.sw1.y, "SeqGen", "#FF9800");
+                },
+                action: () => {
+                    showLabel(POS.sw1.x, POS.sw1.y - 60, `生成 Seq: ${currentSeq}`, "#FF9800");
+                }
+            },
+            {
+                title: "4. 编码与分离 (Encode & Split)",
+                desc: "<b>关键步骤：</b><br>1. 插入 <b>R-TAG (802.1CB Tag)</b>，包含 SeqID。<br>2. <b>复制</b>报文到多条预设路径 (Path A & B)。<br><br>注意右侧报文结构的变化。",
+                setup: () => {
+                    updatePacketView(true); // 显示 R-TAG
+                    updateTable("R-TAG", "Added (0xF1C1)", "Seq", currentSeq);
+                    internalLayer.style.display = 'none'; // 隐藏内部框，准备发射
+                },
+                action: () => {
+                    // 发射两路
+                    createPacket(POS.sw1.x, POS.sw1.y, POS.sw2.x, POS.sw2.y, `Seq:${currentSeq}`, "var(--packet-a)", 1000);
+                    createPacket(POS.sw1.x, POS.sw1.y, POS.sw3.x, POS.sw3.y, `Seq:${currentSeq}`, "var(--packet-b)", 1000);
+                    
+                    showLabel(POS.sw1.x + 60, POS.sw1.y - 30, "插入 R-TAG", "var(--tag-color)");
+                }
+            },
+            {
+                title: "5. 消除重复 (Vector Elimination)",
+                desc: "两个副本先后到达 SW4 (Merger)。<br>SW4 维护一个<b>滑动窗口 (Vector)</b> 记录最近收到的 Seq。<br><br>Path A 先到 -> 检查窗口 -> <b>新帧，通过</b>。<br>Path B 后到 -> 检查窗口 -> <b>重复，丢弃</b>。",
+                setup: () => {
+                    updateTable("Window", "[...1023]", "Received", "None");
+                },
+                action: () => {
+                    // Path A 到达
+                    createPacket(POS.sw2.x, POS.sw2.y, POS.sw4.x, POS.sw4.y, `Seq:${currentSeq}`, "var(--packet-a)", 1000, () => {
+                         updateTable("Window", `[...1023, ${currentSeq}]`, "Action", "Pass");
+                         showLabel(POS.sw4.x, POS.sw4.y - 60, "新Seq，通过", "#4CAF50");
+                         
+                         // 进入解码阶段，暂存
+                         drawPacketStatic(POS.sw4.x, POS.sw4.y, `Seq:${currentSeq}`, "var(--packet-a)");
+                    });
+
+                    // Path B 到达 (稍慢)
+                    setTimeout(() => {
+                        createPacket(POS.sw3.x, POS.sw3.y, POS.sw4.x, POS.sw4.y, `Seq:${currentSeq}`, "var(--packet-b)", 1200, () => {
+                             showLabel(POS.sw4.x, POS.sw4.y + 60, "重复Seq，丢弃", "#F44336");
+                             drawCross(POS.sw4.x - 20, POS.sw4.y + 30);
+                        });
+                    }, 200);
+                }
+            },
+            {
+                title: "6. 解码与恢复 (Decode)",
+                desc: "SW4 在将报文发给 Listener 之前，必须<b>移除 R-TAG</b>。<br>这被称为“解码”。<br>Listener 收到的是还原后的标准以太网帧，对中间的冗余过程无感知。",
+                setup: () => {
+                    layer.innerHTML = ''; // 清除之前的静态包
+                    updatePacketView(false); // 移除 R-TAG
+                    updateTable("Action", "Pop R-TAG", "Output", "Port -> Listener");
+                },
+                action: () => {
+                    showLabel(POS.sw4.x + 60, POS.sw4.y - 30, "移除 R-TAG", "#aaa");
+                    createPacket(POS.sw4.x, POS.sw4.y, POS.listener.x, POS.listener.y, "Eth Frame", "#fff", 1000);
+                }
+            },
+            {
+                title: "演示完成",
+                desc: "这就是 802.1CB 的完整生命周期：<br><b>识别 -> 编号 -> 编码 -> 复制 -> 传输 -> 消除 -> 解码</b>。<br><br>这种机制保证了 TSN 网络的高可靠性 (Seamless Redundancy)。",
+                setup: () => {
+                    updateTable("Status", "Completed");
+                },
+                action: () => {
+                    showLabel(POS.listener.x, POS.listener.y - 40, "接收成功", "#4CAF50");
+                }
+            }
+        ];
+
+        // UI 更新函数
+        function updatePacketView(hasRTag) {
+            const rtag = document.getElementById('rtagField');
+            if(hasRTag) {
+                rtag.classList.add('show');
+            } else {
+                rtag.classList.remove('show');
+            }
+        }
+
+        function updateTable(k1, v1, k2, v2) {
+            const div = document.getElementById('tableView');
+            const content = document.getElementById('tableContent');
+            div.style.display = 'block';
+            
+            let html = `<div class="table-row"><span class="t-key">${k1}</span><span class="t-val">${v1}</span></div>`;
+            if(k2) {
+                html += `<div class="table-row"><span class="t-key">${k2}</span><span class="t-val">${v2}</span></div>`;
+            }
+            content.innerHTML = html;
+        }
+
+        // 绘图函数
+        function createPacket(x1, y1, x2, y2, text, color, duration, onComplete) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("width", 70);
+            rect.setAttribute("height", 30);
+            rect.setAttribute("x", -35);
+            rect.setAttribute("y", -15);
+            rect.setAttribute("fill", color === "#fff" ? "#37474f" : color);
+            rect.setAttribute("class", "packet");
+            
+            const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            txt.setAttribute("text-anchor", "middle");
+            txt.setAttribute("dy", 5);
+            txt.setAttribute("fill", "#fff");
+            txt.setAttribute("font-size", "12px");
+            txt.textContent = text;
+            
+            g.appendChild(rect);
+            g.appendChild(txt);
+            g.setAttribute("transform", `translate(${x1}, ${y1})`);
+            layer.appendChild(g);
+            
+            const startTime = performance.now();
+            function animate(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const curX = x1 + (x2 - x1) * progress;
+                const curY = y1 + (y2 - y1) * progress;
+                g.setAttribute("transform", `translate(${curX}, ${curY})`);
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    if (onComplete) onComplete();
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        function drawPacketStatic(x, y, text, color) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("width", 70); rect.setAttribute("height", 30);
+            rect.setAttribute("x", -35); rect.setAttribute("y", -15);
+            rect.setAttribute("fill", color); rect.setAttribute("class", "packet");
+            const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            txt.setAttribute("text-anchor", "middle"); txt.setAttribute("dy", 5);
+            txt.setAttribute("fill", "#fff"); txt.setAttribute("font-size", "12px");
+            txt.textContent = text;
+            g.appendChild(rect); g.appendChild(txt);
+            g.setAttribute("transform", `translate(${x}, ${y})`);
+            layer.appendChild(g);
+        }
+
+        function showLabel(x, y, text, color) {
+            const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            t.setAttribute("x", x); t.setAttribute("y", y);
+            t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", color);
+            t.setAttribute("font-weight", "bold"); t.setAttribute("class", "fade-in");
+            t.textContent = text;
+            layer.appendChild(t);
+        }
+
+        function drawCross(x, y) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const l1 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            l1.setAttribute("x1", x-8); l1.setAttribute("y1", y-8);
+            l1.setAttribute("x2", x+8); l1.setAttribute("y2", y+8);
+            l1.setAttribute("stroke", "red"); l1.setAttribute("stroke-width", 3);
+            const l2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            l2.setAttribute("x1", x+8); l2.setAttribute("y1", y-8);
+            l2.setAttribute("x2", x-8); l2.setAttribute("y2", y+8);
+            l2.setAttribute("stroke", "red"); l2.setAttribute("stroke-width", 3);
+            g.appendChild(l1); g.appendChild(l2);
+            g.classList.add("fade-in");
+            layer.appendChild(g);
+        }
+
+        function drawInternalBox(x, y, text, color) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("x", x - 40); rect.setAttribute("y", y - 40);
+            rect.setAttribute("width", 80); rect.setAttribute("height", 80);
+            rect.setAttribute("fill", "none"); rect.setAttribute("stroke", color);
+            rect.setAttribute("stroke-width", 2); rect.setAttribute("stroke-dasharray", "4");
+            rect.setAttribute("rx", 4);
+            
+            const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            t.setAttribute("x", x); t.setAttribute("y", y + 5);
+            t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", color);
+            t.textContent = text;
+            
+            g.appendChild(rect); g.appendChild(t);
+            g.classList.add("fade-in");
+            internalLayer.appendChild(g);
+        }
+
+        // 逻辑控制
+        function updateUI() {
+            const btnPrev = document.getElementById('btnPrev');
+            const btnNext = document.getElementById('btnNext');
+            const stepTitle = document.getElementById('stepTitle');
+            const stepDesc = document.getElementById('stepDesc');
+            const stepCount = document.getElementById('stepCount');
+
+            btnPrev.disabled = currentStep === 0;
+            btnNext.disabled = currentStep >= steps.length;
+            if(currentStep >= steps.length) btnNext.textContent = "演示结束";
+            else btnNext.textContent = "下一步";
+
+            stepCount.textContent = `${currentStep}/${steps.length}`;
+
+            if (currentStep === 0) {
+                // 初始
+            } else {
+                const stepData = steps[currentStep - 1];
+                stepTitle.textContent = stepData.title;
+                stepDesc.innerHTML = stepData.desc;
+                if(stepData.setup) stepData.setup();
+                if(stepData.action) stepData.action();
+            }
+        }
+
+        function nextStep() {
+            if (currentStep < steps.length) {
+                currentStep++;
+                updateUI();
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                resetSim(); // 简单处理
+            }
+        }
+
+        function resetSim() {
+            currentStep = 0;
+            layer.innerHTML = '';
+            internalLayer.innerHTML = '';
+            internalLayer.style.display = 'none';
+            document.getElementById('stepTitle').textContent = "准备就绪";
+            document.getElementById('stepDesc').innerHTML = `
+                    点击“下一步”开始深度演示 802.1CB (FRER) 的处理流程。<br><br>
+                    <b>演示重点：</b>
+                    <ul>
+                        <li>流识别 (Stream ID)</li>
+                        <li>序列号生成 (SeqGen)</li>
+                        <li>R-TAG 编码 (Encoding)</li>
+                        <li>冗余传输与消除</li>
+                    </ul>
+            `;
+            document.getElementById('tableView').style.display = 'none';
+            updatePacketView(false);
+            
+            document.getElementById('btnNext').textContent = "下一步";
+            document.getElementById('stepCount').textContent = "0/" + steps.length;
+            document.getElementById('btnPrev').disabled = true;
+            document.getElementById('btnNext').disabled = false;
+        }
+
+    </script>
+</body>
+</html>

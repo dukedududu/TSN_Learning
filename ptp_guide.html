@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PTP/gPTP 协议交互图解 (Step-by-Step)</title>
+    <style>
+        :root {
+            --primary: #2196F3;
+            --secondary: #673AB7;
+            --success: #4CAF50;
+            --bg: #0f111a;
+            --text: #e0e0e0;
+            --panel: #1a1d2d;
+            --line: #2f334d;
+            --master-color: #42a5f5;
+            --slave-color: #ab47bc;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        .back-link {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            z-index: 100;
+        }
+        .back-link:hover { color: #fff; }
+
+        h1 {
+            margin: 0 0 20px 0;
+            font-size: 24px;
+            color: var(--primary);
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1400px; /* 增加最大宽度以适应更宽的SVG */
+            height: 100%;
+            gap: 20px;
+        }
+
+        /* 左侧图解区域 */
+        .diagram-area {
+            flex: 2;
+            background: var(--panel);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .svg-container {
+            flex: 1;
+            width: 100%;
+            position: relative;
+            overflow-y: auto;
+        }
+
+        /* 右侧控制与讲解区域 */
+        .control-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 350px;
+            max-width: 450px;
+        }
+
+        .step-card {
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 5px solid var(--primary);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .step-header {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: var(--primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .step-desc {
+            font-size: 16px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            flex: 1;
+        }
+
+        .formula-box {
+            background: rgba(0,0,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Consolas', monospace;
+            margin-bottom: 15px;
+            border: 1px solid var(--line);
+        }
+
+        .formula-title {
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        .highlight-var {
+            color: var(--success);
+            font-weight: bold;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: auto;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .btn-prev { background: #424242; color: white; }
+        .btn-next { background: var(--primary); color: white; }
+        .btn-reset { background: #d32f2f; color: white; }
+
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* SVG Styles */
+        text { fill: var(--text); font-family: 'Segoe UI', sans-serif; }
+        .axis-line { stroke: var(--line); stroke-width: 2; stroke-dasharray: 5,5; }
+        .msg-arrow { stroke-width: 2; marker-end: url(#arrowhead); }
+        .time-label { font-size: 12px; fill: #aaa; }
+        .event-point { r: 4; }
+        .host-label { font-size: 16px; font-weight: bold; }
+        
+        /* Animation classes */
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    </style>
+</head>
+<body>
+
+    <a href="tsn_control.html" class="back-link">↩ 返回总览</a>
+
+    <h1>PTP/gPTP 时间同步原理交互图解</h1>
+
+    <div class="container">
+        <!-- 核心图解区 -->
+        <div class="diagram-area">
+            <!-- 增加 viewBox 高度到 1000 以容纳所有步骤 -->
+            <svg id="mainSvg" width="100%" height="100%" viewBox="0 0 850 1000">
+                <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="#fff" />
+                    </marker>
+                </defs>
+                
+                <!-- 垂直轴 (调整坐标: Master=200, Slave=650) -->
+                <line x1="200" y1="50" x2="200" y2="980" class="axis-line" />
+                <line x1="650" y1="50" x2="650" y2="980" class="axis-line" />
+
+                <!-- 顶部标签 -->
+                <rect x="140" y="10" width="120" height="40" rx="5" fill="#1e2235" stroke="var(--master-color)" stroke-width="2"/>
+                <text x="200" y="35" text-anchor="middle" class="host-label" fill="var(--master-color)">主时钟 (Master)</text>
+
+                <rect x="590" y="10" width="120" height="40" rx="5" fill="#1e2235" stroke="var(--slave-color)" stroke-width="2"/>
+                <text x="650" y="35" text-anchor="middle" class="host-label" fill="var(--slave-color)">从时钟 (Slave)</text>
+
+                <!-- 动态内容将通过JS插入 -->
+                <g id="dynamicLayer"></g>
+            </svg>
+        </div>
+
+        <!-- 右侧讲解区 -->
+        <div class="control-panel">
+            <div class="step-card">
+                <div class="step-header">
+                    <span id="stepTitle">准备开始</span>
+                    <span id="stepCount" style="font-size:14px; opacity:0.7">0/7</span>
+                </div>
+                <div id="stepDesc" class="step-desc">
+                    点击“下一步”开始演示 PTP 时间同步的完整过程。<br><br>
+                    核心逻辑分为两个阶段：<br>
+                    1. <b>测量路径延迟 (Path Delay)</b>：先算出网线有多长。<br>
+                    2. <b>计算时间偏差 (Offset)</b>：扣除网线延迟后，算出两个表差多少。
+                </div>
+                
+                <div id="formulaContainer" class="formula-box" style="display:none;">
+                    <div class="formula-title">计算公式</div>
+                    <div id="formulaContent"></div>
+                </div>
+
+                <div class="controls">
+                    <button class="btn-prev" id="btnPrev" onclick="prevStep()" disabled>上一步</button>
+                    <button class="btn-next" id="btnNext" onclick="nextStep()">下一步</button>
+                    <button class="btn-reset" onclick="resetSim()">重置</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 模拟数据配置
+        const CONFIG = {
+            masterBaseTime: "12:00:00", // Master 基准时间
+            slaveOffset: 500,           // Slave 初始偏差 500ms
+            pathDelay: 20,              // 物理传输耗时 20ms
+            processDelay: 10,           // 处理耗时 10ms
+            baseY: 100,                 // 绘图起始Y坐标 (留出BMCA的空间)
+            stepY: 90,                  // 每步Y轴间距
+            
+            // 布局坐标配置 (对应SVG中的改动)
+            layout: {
+                xMaster: 200,
+                xSlave: 650,
+                xCenter: 425  // (200+650)/2
+            }
+        };
+
+        // 状态变量
+        let currentStep = 0;
+        const totalSteps = 9; // BMCA(0) + Pdelay(1-5) + Sync(6) + Offset(7) + Freq(8) = 9步
+        
+        // 关键时间点记录
+        let t1, t2, t3, t4; // Pdelay 阶段
+        let t5, t6;         // Sync 阶段
+        let meanPathDelay = 0;
+        let offset = 0;
+        
+        // 存储原始时间基准，用于计算后续步骤的时间
+        const RAW_TIMES = {};
+
+        const layer = document.getElementById('dynamicLayer');
+
+        // 时间格式化工具 (修复SVG不支持HTML标签的问题，移除span)
+        function formatTime(role, addedMs) {
+            let totalMs = addedMs;
+            if (role === 'slave') {
+                totalMs += CONFIG.slaveOffset;
+            }
+            
+            // 基础时间 12:00:00
+            let h = 12, m = 0, s = 0;
+            
+            // 计算增量
+            let addS = Math.floor(totalMs / 1000);
+            let remMs = totalMs % 1000;
+            
+            s += addS;
+            while (s >= 60) { s -= 60; m++; }
+            while (m >= 60) { m -= 60; h++; }
+            
+            const p = (n) => String(n).padStart(2, '0');
+            const p3 = (n) => String(n).padStart(3, '0');
+            
+            // 直接返回纯文本，不包含 HTML 标签
+            return `${p(h)}:${p(m)}:${p(s)}.${p3(remMs)}000`;
+        }
+        
+        // 格式化数值用于公式 (显示为 秒.毫秒)
+        function fmtVal(totalMs) {
+             let s = Math.floor(totalMs / 1000) % 60;
+             let ms = totalMs % 1000;
+             return `${s}.${String(ms).padStart(3,'0')}`;
+        }
+        
+        function getTimeVal(role, addedMs) {
+            if (role === 'slave') return CONFIG.slaveOffset + addedMs;
+            return addedMs;
+        }
+        
+        function getLayout() {
+            return CONFIG.layout;
+        }
+
+        // 步骤定义
+        const steps = [
+            {
+                title: "阶段零：最佳主时钟选举 (BMCA)",
+                desc: "在开始同步前，网络中的设备必须确定谁是 Master。<br>双方互发 <code>Announce</code> 报文，比较时钟质量。<br><br><b>动作：</b>左边设备质量更高，胜出成为 <b>Master</b>。",
+                draw() {
+                    const { xMaster, xSlave, xCenter } = getLayout();
+                    const y = 60;
+                    drawArrow(xMaster, y, xSlave, y + 20, "Announce", "#aaa", true);
+                    drawArrow(xSlave, y+10, xMaster, y + 30, "Announce", "#aaa", true);
+                    
+                    setTimeout(() => {
+                         drawInfoBox(xMaster, y-35, "Master", "#1976D2");
+                         drawInfoBox(xSlave, y-35, "Slave", "#7B1FA2");
+                    }, 500);
+                }
+            },
+            {
+                title: "阶段一：测量路径延迟 (Pdelay)",
+                desc: "确定角色后，开始测量网线延迟。<br><b>动作：</b>Slave 发送 <code>Pdelay_Req</code>，记录发送时间 <b>t1</b>。<br>注意：Slave 此时比 Master 快 0.5 秒。",
+                draw() {
+                    const { xMaster, xSlave } = getLayout();
+                    const baseT = 1000; 
+                    t1 = getTimeVal('slave', baseT); 
+                    
+                    drawPoint(xSlave, getY(0), `t1=${formatTime('slave', baseT)}`, "right", "var(--slave-color)");
+                    drawArrow(xSlave, getY(0), xMaster, getY(0) + 40, "Pdelay_Req", "#aaa");
+                    
+                    RAW_TIMES.t1 = baseT;
+                }
+            },
+            {
+                title: "Master 收到请求",
+                desc: "Master 收到请求，记录接收时间 <b>t2</b>。<br>t2 是 Master 的时间基准。",
+                draw() {
+                    const { xMaster } = getLayout();
+                    const baseT = RAW_TIMES.t1 + CONFIG.pathDelay;
+                    t2 = getTimeVal('master', baseT);
+                    
+                    drawPoint(xMaster, getY(0) + 40, `t2=${formatTime('master', baseT)}`, "left", "var(--master-color)");
+                    RAW_TIMES.t2 = baseT;
+                }
+            },
+            {
+                title: "Master 发送响应",
+                desc: "Master 处理后发送 <code>Pdelay_Resp</code>，记录发送时间 <b>t3</b>。<br>报文中携带 t2 和 t3。",
+                draw() {
+                    const { xMaster, xSlave } = getLayout();
+                    const baseT = RAW_TIMES.t2 + CONFIG.processDelay;
+                    t3 = getTimeVal('master', baseT);
+
+                    drawLine(xMaster, getY(0)+40, xMaster, getY(1), "#555", 2);
+                    drawPoint(xMaster, getY(1), `t3=${formatTime('master', baseT)}`, "left", "var(--master-color)");
+                    drawArrow(xMaster, getY(1), xSlave, getY(1) + 40, "Pdelay_Resp", "#aaa");
+                    
+                    RAW_TIMES.t3 = baseT;
+                }
+            },
+            {
+                title: "Slave 收到响应",
+                desc: "Slave 收到响应，记录接收时间 <b>t4</b>。<br>至此，Pdelay 阶段结束。",
+                draw() {
+                    const { xSlave } = getLayout();
+                    const baseT = RAW_TIMES.t3 + CONFIG.pathDelay;
+                    t4 = getTimeVal('slave', baseT);
+
+                    drawPoint(xSlave, getY(1) + 40, `t4=${formatTime('slave', baseT)}`, "right", "var(--slave-color)");
+                }
+            },
+            {
+                title: "计算路径延迟 (MeanPathDelay)",
+                desc: "利用四个时间戳计算网线延迟。<br>公式：<code>[(t4 - t1) - (t3 - t2)] / 2</code>",
+                formula: () => {
+                    // formula 仅负责返回展示用的 HTML，计算逻辑移至 draw 确保同步
+                    const roundTrip = t4 - t1;
+                    const processTime = t3 - t2;
+                    // meanPathDelay 已经在 draw 中计算更新了
+                    return `
+                        t1=${fmtVal(t1)}, t4=${fmtVal(t4)} -> 往返=${roundTrip}ms<br>
+                        t2=${fmtVal(t2)}, t3=${fmtVal(t3)} -> 处理=${processTime}ms<br>
+                        <b>PathDelay</b> = (${roundTrip} - ${processTime}) / 2 = <span class="highlight-var">${meanPathDelay}ms</span>
+                    `;
+                },
+                draw() {
+                    // 在绘图前先执行计算，确保数据显示正确
+                    const roundTrip = t4 - t1;
+                    const processTime = t3 - t2;
+                    meanPathDelay = (roundTrip - processTime) / 2;
+                    
+                    const { xCenter } = getLayout();
+                    drawInfoBox(xCenter, getY(2)-30, `Delay = ${meanPathDelay}ms`, "#00796B");
+                }
+            },
+            {
+                title: "阶段二：同步时间 (Sync)",
+                desc: "Master 主动发送 <code>Sync</code> 报文，记录 <b>t5</b>。<br>Slave 收到记录 <b>t6</b>。<br>Master 再发 <code>Follow_Up</code> 告知 t5。",
+                draw() {
+                    const { xMaster, xSlave } = getLayout();
+                    const timeGap = 200; 
+                    const baseT_tx = RAW_TIMES.t3 + timeGap;
+                    
+                    t5 = getTimeVal('master', baseT_tx);
+                    const baseT_rx = baseT_tx + CONFIG.pathDelay;
+                    t6 = getTimeVal('slave', baseT_rx);
+
+                    drawPoint(xMaster, getY(3), `t5=${formatTime('master', baseT_tx)}`, "left", "var(--master-color)");
+                    drawArrow(xMaster, getY(3), xSlave, getY(3) + 40, "Sync", "#fff");
+                    drawPoint(xSlave, getY(3) + 40, `t6=${formatTime('slave', baseT_rx)}`, "right", "var(--slave-color)");
+                    
+                    drawArrow(xMaster, getY(3) + 20, xSlave, getY(3) + 60, "Follow_Up(t5)", "#777", true);
+                }
+            },
+            {
+                title: "阶段二：相位对齐 (Phase Alignment)",
+                desc: "Slave 计算出偏差 (Offset) 后，直接把自己的时间减去这个值，完成<b>相位校准</b>。<br>现在，两块表的指针位置完全一样了。",
+                formula: () => {
+                    // Offset 已经在 draw 中计算
+                    return `
+                        t5=${fmtVal(t5)}, t6=${fmtVal(t6)}, Delay=${meanPathDelay}<br>
+                        Offset = ${fmtVal(t6)} - ${fmtVal(t5)} - ${meanPathDelay}<br>
+                        <b>Offset</b> = <span class="highlight-var">${offset}ms</span> (相位偏差)
+                    `;
+                },
+                draw() {
+                    // 在绘图前先执行计算
+                    offset = t6 - t5 - meanPathDelay;
+
+                    const { xSlave, xCenter } = getLayout();
+                    drawInfoBox(xCenter, getY(4)-20, `Offset = ${offset}ms`, "#E65100");
+                    
+                    // 修正后的时间
+                    const correctedMs = t6 - offset;
+                    
+                    // 手动格式化 correctedMs (不加 slaveOffset)
+                    let h=12, m=0, s=0;
+                    let addS = Math.floor(correctedMs / 1000);
+                    let remMs = correctedMs % 1000;
+                    s += addS;
+                    while(s>=60){s-=60;m++}
+                    while(m>=60){m-=60;h++}
+                    const p=(n)=>String(n).padStart(2,'0');
+                    const cleanStr = `${p(h)}:${p(m)}:${p(s)}.${String(remMs).padStart(3,'0')}000`;
+
+                    drawPoint(xSlave, getY(4)+20, `修正后=${cleanStr}`, "right", "#4CAF50");
+                    drawText(xSlave, getY(4)+40, "(相位已对齐)", "var(--success)");
+                    
+                    // 记录此时的对齐时间，供下一步频率演示使用
+                    RAW_TIMES.aligned = correctedMs;
+                }
+            },
+            {
+                title: "阶段三：频率对齐 (Frequency Adjustment)",
+                desc: "频率对齐是报文来对齐的吗？<br><b>不是！</b>没有专门的“频率报文”。<br>Slave 是通过监听<b>连续的 Sync 报文</b>，发现时间偏差在不断变大（漂移），从而反推出频率误差。<br>这就像你听心跳，第一次听到在 0s，第二次听到在 1.005s，就知道对方表走快了。",
+                formula: () => {
+                     return `
+                        <div><b>1. 连续收到两个 Sync:</b></div>
+                        第一次 Sync: Master=0.000, Slave=0.000 (刚对齐)<br>
+                        第二次 Sync: Master=10.000, Slave=10.005 (漂移)<br>
+                        <br>
+                        <div><b>2. 频率比计算:</b></div>
+                        Ratio = (10.005 - 0) / (10.000 - 0) = 1.0005<br>
+                        <span style="color:#aaa;font-size:12px;">(依靠 Sync 报文的时间间隔来计算)</span>
+                     `;
+                },
+                draw() {
+                    const { xMaster, xSlave, xCenter } = getLayout();
+                    const yStart = getY(5);
+                    
+                    // 1. 绘制第一次 Sync (基准)
+                    drawPoint(xMaster, yStart, "Sync_N (t=0)", "left", "#aaa");
+                    drawPoint(xSlave, yStart, "t=0", "right", "#aaa");
+                    drawLine(xMaster, yStart, xSlave, yStart, "#555", 1); // 简化的 Sync 线
+                    
+                    // 2. 绘制第二次 Sync (漂移)
+                    const yEnd = yStart + 60;
+                    drawPoint(xMaster, yEnd, "Sync_N+1 (t=10)", "left", "var(--master-color)");
+                    drawPoint(xSlave, yEnd, "t=10.005", "right", "#FF5722");
+                    drawArrow(xMaster, yEnd, xSlave, yEnd, "Sync 报文", "#fff");
+                    
+                    // 绘制时间间隔标注
+                    const xLabel = xCenter - 40;
+                    drawLine(xMaster - 20, yStart, xMaster - 20, yEnd, "#2196F3", 2);
+                    drawText(xMaster - 110, yStart + 35, "Δt_master=10s", "#2196F3");
+                    
+                    drawLine(xSlave + 20, yStart, xSlave + 20, yEnd, "#FF5722", 2);
+                    drawText(xSlave + 30, yStart + 35, "Δt_slave=10.005s", "#FF5722");
+
+                    // 3. 硬件调节演示区 (下移)
+                    const yMicro = yEnd + 80;
+                    
+                    setTimeout(() => {
+                        // 绘制硬件模型背景
+                        const rectX = xSlave - 60;
+                        const rectW = 280;
+                        const rectH = 160; // 增加高度，避免文字溢出
+                        
+                        // 容器框
+                        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+                        g.classList.add("fade-in");
+                        const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                        bg.setAttribute("x", rectX);
+                        bg.setAttribute("y", yMicro);
+                        bg.setAttribute("width", rectW);
+                        bg.setAttribute("height", rectH);
+                        bg.setAttribute("fill", "#263238");
+                        bg.setAttribute("stroke", "#546E7A");
+                        bg.setAttribute("rx", 5);
+                        g.appendChild(bg);
+                        
+                        // 标题
+                        const title = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        title.setAttribute("x", rectX + 10);
+                        title.setAttribute("y", yMicro + 25);
+                        title.setAttribute("fill", "#fff");
+                        title.setAttribute("font-weight", "bold");
+                        title.textContent = "Slave 网卡硬件时钟模型";
+                        g.appendChild(title);
+                        
+                        // 晶振图标 (简化圆圈)
+                        const oscX = rectX + 40;
+                        const oscY = yMicro + 70;
+                        const osc = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                        osc.setAttribute("cx", oscX);
+                        osc.setAttribute("cy", oscY);
+                        osc.setAttribute("r", 15);
+                        osc.setAttribute("stroke", "#fff");
+                        osc.setAttribute("fill", "none");
+                        g.appendChild(osc);
+                        const oscText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        oscText.setAttribute("x", oscX);
+                        oscText.setAttribute("y", oscY + 35);
+                        oscText.setAttribute("text-anchor", "middle");
+                        oscText.setAttribute("font-size", "10px");
+                        oscText.setAttribute("fill", "#aaa");
+                        oscText.textContent = "物理晶振";
+                        g.appendChild(oscText);
+                        
+                        // 累加器文字
+                        const regX = rectX + 100;
+                        const regY = yMicro + 75;
+                        const regLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        regLabel.setAttribute("x", regX);
+                        regLabel.setAttribute("y", regY - 15);
+                        regLabel.setAttribute("fill", "#aaa");
+                        regLabel.setAttribute("font-size", "12px");
+                        regLabel.textContent = "每周期累加值 (Addend):";
+                        g.appendChild(regLabel);
+                        
+                        // 动态数值
+                        const regVal = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        regVal.setAttribute("id", "addendVal");
+                        regVal.setAttribute("x", regX);
+                        regVal.setAttribute("y", regY + 5);
+                        regVal.setAttribute("fill", "#FF5722"); // 初始红色
+                        regVal.setAttribute("font-family", "monospace");
+                        regVal.setAttribute("font-weight", "bold");
+                        regVal.setAttribute("font-size", "16px");
+                        regVal.textContent = "1,000,000,000";
+                        g.appendChild(regVal);
+                        
+                        layer.appendChild(g);
+                        
+                    }, 500);
+
+                    // 3. 执行调节动画
+                    setTimeout(() => {
+                        drawArrow(xCenter, yMicro + 50, xSlave - 60, yMicro + 50, "写入新参数", "#2196F3");
+                    }, 1500);
+                    
+                    setTimeout(() => {
+                        const el = document.getElementById("addendVal");
+                        if(el) {
+                            el.textContent = "999,500,249"; // 变小了
+                            el.setAttribute("fill", "#4CAF50"); // 变绿
+                        }
+                        
+                        // 将“频率锁定”提示框居中放置在硬件模型内部底部
+                        drawInfoBox(xSlave + 80, yMicro + 130, "频率锁定 ✔", "#4CAF50");
+                        
+                        // 解释文字移到模型框外下方，并居中对齐
+                        const comment = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                        comment.setAttribute("x", xSlave + 80); // 居中
+                        comment.setAttribute("y", yMicro + 180);
+                        comment.setAttribute("text-anchor", "middle");
+                        comment.setAttribute("fill", "#81C784");
+                        comment.setAttribute("font-size", "14px");
+                        comment.classList.add("fade-in");
+                        comment.textContent = "逻辑时钟变慢，抵消物理快";
+                        layer.appendChild(comment);
+                        
+                    }, 2500);
+                }
+            }
+        ];
+
+        // 辅助绘图函数
+        function getY(stepIndex) {
+            return CONFIG.baseY + stepIndex * CONFIG.stepY;
+        }
+
+        function drawLine(x1, y1, x2, y2, color, width) {
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", x1);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2);
+            line.setAttribute("y2", y2);
+            line.setAttribute("stroke", color);
+            line.setAttribute("stroke-width", width);
+            line.classList.add("fade-in");
+            layer.appendChild(line);
+        }
+
+        function drawArrow(x1, y1, x2, y2, label, color, isDashed = false) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.classList.add("fade-in");
+
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", x1);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2);
+            line.setAttribute("y2", y2);
+            line.setAttribute("stroke", color);
+            line.setAttribute("stroke-width", 2);
+            line.setAttribute("marker-end", "url(#arrowhead)");
+            if (isDashed) line.setAttribute("stroke-dasharray", "5,5");
+            
+            // 计算文字位置 (线条中间上方)
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", midX);
+            text.setAttribute("y", midY - 10);
+            text.setAttribute("text-anchor", "middle");
+            text.setAttribute("fill", color);
+            text.setAttribute("font-size", "14px");
+            text.textContent = label;
+
+            g.appendChild(line);
+            g.appendChild(text);
+            layer.appendChild(g);
+        }
+
+        function drawPoint(x, y, label, anchor, color) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.classList.add("fade-in");
+
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x);
+            circle.setAttribute("cy", y);
+            circle.setAttribute("r", 5);
+            circle.setAttribute("fill", color);
+
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", anchor === "left" ? x - 15 : x + 15);
+            text.setAttribute("y", y + 5);
+            text.setAttribute("text-anchor", anchor === "left" ? "end" : "start");
+            text.setAttribute("fill", color);
+            text.setAttribute("font-weight", "bold");
+            text.textContent = label;
+
+            g.appendChild(circle);
+            g.appendChild(text);
+            layer.appendChild(g);
+        }
+
+        function drawInfoBox(x, y, textContent, color) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            g.classList.add("fade-in");
+
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("x", x - 100);
+            rect.setAttribute("y", y - 15);
+            rect.setAttribute("width", 200);
+            rect.setAttribute("height", 30);
+            rect.setAttribute("rx", 5);
+            rect.setAttribute("fill", color || "#2e7d32");
+            
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", x);
+            text.setAttribute("y", y + 5);
+            text.setAttribute("text-anchor", "middle");
+            text.setAttribute("fill", "white");
+            text.textContent = textContent;
+
+            g.appendChild(rect);
+            g.appendChild(text);
+            layer.appendChild(g);
+        }
+        
+        function drawText(x, y, content, color) {
+             const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.setAttribute("x", x);
+            text.setAttribute("y", y);
+            text.setAttribute("text-anchor", "start");
+            text.setAttribute("fill", color || "#fff");
+            text.textContent = content;
+            text.classList.add("fade-in");
+            layer.appendChild(text);
+        }
+
+        // 逻辑控制
+        function updateUI() {
+            const btnPrev = document.getElementById('btnPrev');
+            const btnNext = document.getElementById('btnNext');
+            const stepTitle = document.getElementById('stepTitle');
+            const stepDesc = document.getElementById('stepDesc');
+            const stepCount = document.getElementById('stepCount');
+            const formulaContainer = document.getElementById('formulaContainer');
+            const formulaContent = document.getElementById('formulaContent');
+
+            btnPrev.disabled = currentStep === 0;
+            btnNext.disabled = currentStep > totalSteps; // 允许最后一步之后禁用
+            if(currentStep > steps.length) btnNext.textContent = "演示结束";
+            else btnNext.textContent = "下一步";
+
+            stepCount.textContent = `${currentStep}/${steps.length}`;
+
+            if (currentStep === 0) {
+                // 初始状态已经在HTML里了
+            } else {
+                const stepData = steps[currentStep - 1];
+                stepTitle.textContent = stepData.title;
+                stepDesc.innerHTML = stepData.desc;
+                
+                // 执行绘图
+                stepData.draw();
+
+                // 显示公式
+                if (stepData.formula) {
+                    formulaContainer.style.display = "block";
+                    formulaContent.innerHTML = stepData.formula();
+                } else {
+                    formulaContainer.style.display = "none";
+                }
+            }
+        }
+
+        function nextStep() {
+            if (currentStep < steps.length) {
+                currentStep++;
+                updateUI();
+                
+                // 自动滚动到底部
+                const container = document.querySelector('.svg-container');
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                currentStep--;
+                resetLayer();
+                if (currentStep === 0) {
+                    resetSim();
+                    return;
+                }
+                for(let i=0; i<currentStep; i++) {
+                    steps[i].draw(); // 重绘之前的
+                }
+                updateUI(); // 更新当前UI
+            }
+        }
+
+        function resetLayer() {
+            layer.innerHTML = '';
+        }
+
+        function resetSim() {
+            currentStep = 0;
+            resetLayer();
+            document.getElementById('stepTitle').textContent = "准备开始";
+            document.getElementById('stepDesc').innerHTML = `
+                    点击“下一步”开始演示 PTP 时间同步的完整过程。<br><br>
+                    核心逻辑分为两个阶段：<br>
+                    1. <b>测量路径延迟 (Path Delay)</b>：先算出网线有多长。<br>
+                    2. <b>计算时间偏差 (Offset)</b>：扣除网线延迟后，算出两个表差多少。
+            `;
+            document.getElementById('formulaContainer').style.display = "none";
+            document.getElementById('btnNext').textContent = "下一步";
+            document.getElementById('stepCount').textContent = "0/" + steps.length;
+            document.getElementById('btnPrev').disabled = true;
+            document.getElementById('btnNext').disabled = false;
+        }
+
+    </script>
+</body>
+</html>

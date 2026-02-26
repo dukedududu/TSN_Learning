@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TSN 协议理论全景</title>
+    <style>
+        :root {
+            --bg: #0f111a;
+            --card-bg: #1a1d2d;
+            --text: #e0e0e0;
+            --primary: #00bcd4;
+            --accent: #ff4081;
+            --success: #4caf50;
+            --purple: #9c27b0;
+            --nav-bg: #15191d;
+            --border: #333;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0; /* Removed padding to fit nav bar */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* Navigation Bar */
+        .nav-bar {
+            width: 100%;
+            height: 60px;
+            background: var(--nav-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            box-sizing: border-box;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+
+        .nav-brand {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--primary);
+            margin-right: 30px;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            flex: 1;
+            overflow-x: auto; /* Allow scrolling on small screens */
+        }
+
+        .nav-item {
+            color: #aaa;
+            text-decoration: none;
+            font-size: 14px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: all 0.2s;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .nav-item:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        
+        .nav-item.active {
+            color: var(--primary);
+            background: rgba(0, 188, 212, 0.1);
+        }
+
+        .nav-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            border-right: 1px solid #333;
+            padding-right: 15px;
+            margin-right: 15px;
+        }
+        .nav-group:last-child {
+            border-right: none;
+        }
+
+        /* Main Content */
+        .main-container {
+            padding: 40px 20px;
+            width: 100%;
+            max-width: 1200px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        h1 {
+            font-size: 36px;
+            margin: 0 0 10px 0;
+            background: linear-gradient(45deg, var(--primary), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: #888;
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 30px;
+            border: 1px solid #333;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            text-decoration: none; /* Make card clickable */
+        }
+
+        .card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-color: var(--hover-color);
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: var(--hover-color);
+        }
+
+        .icon {
+            font-size: 40px;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #fff;
+        }
+
+        .protocol-list {
+            margin: 10px 0 20px 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .badge {
+            background: rgba(255,255,255,0.1);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--hover-color);
+        }
+
+        .card-desc {
+            color: #aaa;
+            line-height: 1.6;
+            flex: 1;
+            margin-bottom: 25px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 0;
+            text-align: center;
+            background: var(--hover-color);
+            color: #000;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: filter 0.2s;
+        }
+
+        .btn:hover {
+            filter: brightness(1.2);
+        }
+
+        /* Card Variations */
+        .card.time { --hover-color: #ff9800; }
+        .card.traffic { --hover-color: #00bcd4; }
+        .card.reliability { --hover-color: #4caf50; }
+        .card.config { --hover-color: #9c27b0; }
+        .card.driver { --hover-color: #ff4081; }
+
+    </style>
+</head>
+<body>
+
+    <!-- Navigation Bar -->
+    <nav class="nav-bar">
+        <div class="nav-brand">
+            <span>📚 TSN 理论知识库</span>
+        </div>
+
+        <div class="nav-links">
+            <!-- Local Resources (Theory) Only -->
+            <a href="ptp_guide.html" class="nav-item">⏱️ 时间同步</a>
+            <a href="tsn_step_guide.html" class="nav-item">🚦 流量调度</a>
+            <a href="frer_guide.html" class="nav-item">🛡️ 高可靠性</a>
+            <a href="tsn_config_guide.html" class="nav-item">⚙️ 配置管理</a>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header>
+            <h1>TSN 协议理论全景</h1>
+            <p class="subtitle">Time Sensitive Networking Protocol Suite</p>
+        </header>
+
+        <div class="grid-container">
+            
+            <!-- 1. 时间同步 -->
+            <div class="card time">
+                <div class="icon">⏱️</div>
+                <div class="card-title">时间同步</div>
+                <div class="protocol-list">
+                    <span class="badge">802.1AS</span>
+                    <span class="badge">gPTP</span>
+                </div>
+                <div class="card-desc">
+                    TSN 的基石。所有设备必须基于同一时间基准（Global Time）运行。包括 BMCA 选主、Pdelay 测量、频率同步与相位对齐。
+                </div>
+                <a href="ptp_guide.html" class="btn">进入图解演示 →</a>
+            </div>
+
+            <!-- 2. 流量调度 -->
+            <div class="card traffic">
+                <div class="icon">🚦</div>
+                <div class="card-title">流量调度与整形</div>
+                <div class="protocol-list">
+                    <span class="badge">802.1Qbv</span>
+                    <span class="badge">802.1Qbu</span>
+                    <span class="badge">802.1Qav</span>
+                    <span class="badge">802.1Qci</span>
+                </div>
+                <div class="card-desc">
+                    确定性传输的核心。通过门控列表 (TAS)、帧抢占 (Preemption) 和信用整形 (CBS)，确保关键流低延迟、低抖动。
+                </div>
+                <a href="tsn_step_guide.html" class="btn">进入单步详解 →</a>
+            </div>
+
+            <!-- 3. 高可靠性 -->
+            <div class="card reliability">
+                <div class="icon">🛡️</div>
+                <div class="card-title">高可靠性</div>
+                <div class="protocol-list">
+                    <span class="badge">802.1CB</span>
+                    <span class="badge">FRER</span>
+                </div>
+                <div class="card-desc">
+                    帧复制与消除 (Frame Replication and Elimination)。通过多路径传输实现 0 丢包冗余，保障关键业务永不中断。
+                </div>
+                <a href="frer_guide.html" class="btn">进入可靠性演示 →</a>
+            </div>
+
+            <!-- 4. 配置与管理 -->
+            <div class="card config">
+                <div class="icon">⚙️</div>
+                <div class="card-title">配置与管理</div>
+                <div class="protocol-list">
+                    <span class="badge">802.1Qcc</span>
+                    <span class="badge">802.1Qat</span>
+                    <span class="badge">802.1Qca</span>
+                </div>
+                <div class="card-desc">
+                    控制平面大脑。CNC (中央控制器) 负责全局拓扑发现、路径计算和门控列表 (GCL) 的统一下发。
+                </div>
+                <a href="tsn_config_guide.html" class="btn">进入配置图解 →</a>
+            </div>
+
+        </div>
+    </div>
+
+</body>
+</html>
